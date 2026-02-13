@@ -129,6 +129,17 @@ async function runPRMode(
   // Step 4: Map API results to ComparisonResult[]
   const comparisons: ComparisonResult[] = apiResponse.results.map(r => r.comparison);
 
+  // Normalize after JSON round-trip (undefined fields get stripped by JSON.stringify)
+  for (const comp of comparisons) {
+    for (const insight of comp.synthesis.factorInsights) {
+      if (!insight.findings) insight.findings = [];
+    }
+    for (const factor of comp.factorResults) {
+      if (!factor.findings) factor.findings = [];
+      if (!factor.assessments) factor.assessments = [];
+    }
+  }
+
   // Step 5: Post PR comment
   core.info('Posting PR review comment...');
   const commentBody = formatPRComment(comparisons);

@@ -111,6 +111,21 @@ function cleanCodeSnippet(code: string): string {
 }
 
 /**
+ * Returns a code fence delimiter that won't conflict with content.
+ * If content contains ```, uses ```` (4 backticks), etc.
+ */
+function getCodeFence(content: string): string {
+  let maxRun = 0;
+  const matches = content.match(/`{3,}/g);
+  if (matches) {
+    for (const m of matches) {
+      maxRun = Math.max(maxRun, m.length);
+    }
+  }
+  return '`'.repeat(Math.max(3, maxRun + 1));
+}
+
+/**
  * Detects if a line matches common section header patterns.
  *
  * Conservative matching to avoid false positives:
@@ -339,9 +354,10 @@ function formatFactorFindings(
         // Clean section headers from code
         const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
 
-        // Render code block if non-empty
+        // Render code block if non-empty (dynamic fence to avoid nested ``` conflicts)
         if (cleanedCode.trim()) {
-          md += `\`\`\`\n${cleanedCode}\n\`\`\`\n\n`;
+          const codeFence = getCodeFence(cleanedCode);
+          md += `${codeFence}\n${cleanedCode}\n${codeFence}\n\n`;
         }
       }
 
@@ -351,7 +367,8 @@ function formatFactorFindings(
       // Proposed prompt edit (if present and not empty)
       if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
         md += `**Proposed prompt edit:**\n\n`;
-        md += `\`\`\`\n${finding.rewrittenCode}\n\`\`\`\n\n`;
+        const rewriteFence = getCodeFence(finding.rewrittenCode);
+        md += `${rewriteFence}\n${finding.rewrittenCode}\n${rewriteFence}\n\n`;
       }
 
       md += `---\n\n`;
