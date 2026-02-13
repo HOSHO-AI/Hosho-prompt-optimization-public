@@ -5,7 +5,7 @@ import {
   FactorInsight,
 } from './types';
 
-const BOT_MARKER = '<!-- prompt-factor-reviewer -->';
+const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
 
 /**

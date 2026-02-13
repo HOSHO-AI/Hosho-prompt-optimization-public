@@ -442,7 +442,7 @@ exports.BOT_MARKER = void 0;
 exports.formatPRComment = formatPRComment;
 exports.formatJobSummary = formatJobSummary;
 exports.formatOnDemandSummary = formatOnDemandSummary;
-const BOT_MARKER = '<!-- prompt-factor-reviewer -->';
+const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
 exports.BOT_MARKER = BOT_MARKER;
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
 /**
