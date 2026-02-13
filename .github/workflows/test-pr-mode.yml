@@ -1,0 +1,26 @@
+name: Test Action (PR Mode)
+
+on:
+  pull_request:
+    paths:
+      - 'test-prompts/**'
+
+jobs:
+  test-pr-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Prompt Factor Reviewer
+        uses: ./
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          api_key: ${{ secrets.HOSHO_API_KEY }}
+          api_url: ${{ secrets.HOSHO_API_URL }}
+          prompt_path: test-prompts/
