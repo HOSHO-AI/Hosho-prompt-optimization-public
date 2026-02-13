@@ -1,0 +1,37 @@
+name: 'Prompt Factor Reviewer'
+description: 'Evaluates AI agent prompts against 6 prompt factors using the Hosho review API'
+author: 'Hosho'
+
+branding:
+  icon: 'check-circle'
+  color: 'purple'
+
+inputs:
+  api_key:
+    description: 'Hosho Prompt Reviewer API key'
+    required: true
+  api_url:
+    description: 'API endpoint URL'
+    required: true
+  prompt_file:
+    description: 'Path to specific prompt file to review (on-demand mode only)'
+    required: false
+    default: ''
+  prompt_path:
+    description: 'Directory prefix for identifying prompt files in PRs'
+    required: false
+    default: 'prompts/'
+  system_overview:
+    description: 'Path to system overview markdown file describing the multi-agent pipeline (optional)'
+    required: false
+    default: ''
+
+outputs:
+  overall_score:
+    description: 'Overall score label (Excellent/Good/Needs Work/Critical)'
+  review_summary:
+    description: 'Brief summary of the review findings'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
