@@ -91,6 +91,15 @@ For on-demand mode (manual trigger to evaluate any prompt file), see [`examples/
 
 If your prompts are part of a multi-agent pipeline, create a markdown file describing how your agents connect and pass it via the `system_overview` input. This helps the reviewer understand what inputs each prompt receives and what downstream agents consume its output.
 
+For each agent in your system, include:
+- **Prompt file** — which file contains its prompt
+- **Model** — which LLM it targets (e.g., Claude Sonnet, GPT-4o, Gemini Pro)
+- **Role** — what it does in one sentence
+- **Inputs** — what data it receives and from where
+- **Outputs** — what it produces and which agents consume it
+
+For complex pipelines, you can also document execution phases, parallel groups, and key constraints.
+
 Three of the six factors benefit from this context:
 - **Scope** — understands what's intentionally delegated to other agents
 - **Context & Guidance** — knows what inputs come from upstream
