@@ -1,3 +1,13 @@
 node_modules/
 build/
 # dist/ is committed for GitHub Actions
+
+# Secrets and credentials
+.env*
+*.pem
+*.key
+*.crt
+
+# OS files
+.DS_Store
+Thumbs.db

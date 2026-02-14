@@ -1,0 +1,27 @@
+name: Prompt Review (On-Demand)
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt_file:
+        description: 'Path to prompt file to review'
+        required: true
+        default: 'prompts/my-prompt.md'
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: HOSHO-AI/Hosho-prompt-optimization-public@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          api_key: ${{ secrets.HOSHO_API_KEY }}
+          api_url: ${{ secrets.HOSHO_API_URL }}
+          prompt_file: ${{ github.event.inputs.prompt_file }}
+          # system_overview: docs/system-overview.md   # Optional — see README for details

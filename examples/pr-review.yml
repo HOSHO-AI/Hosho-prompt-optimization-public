@@ -1,0 +1,28 @@
+name: Prompt Review
+
+on:
+  pull_request:
+    paths:
+      - 'prompts/**'   # Adjust to match where your prompt files live
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Required — the action needs git history to compare versions
+
+      - uses: HOSHO-AI/Hosho-prompt-optimization-public@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          api_key: ${{ secrets.HOSHO_API_KEY }}
+          api_url: ${{ secrets.HOSHO_API_URL }}
+          prompt_path: prompts/
+          # system_overview: docs/system-overview.md   # Optional — see README for details
