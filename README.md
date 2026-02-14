@@ -183,5 +183,5 @@ See [`examples/on-demand.yml`](examples/on-demand.yml) for a complete workflow.
 ## Requirements
 
 - **API key and URL** from Hosho
-- **`GITHUB_TOKEN`** — automatically provided by GitHub Actions, but your workflow must declare `pull-requests: write` permission for PR mode
+- **`GITHUB_TOKEN`** — automatically provided by GitHub Actions, but your workflow must declare `pull-requests: write` and `issues: write` permissions for PR mode
 - **`fetch-depth: 0`** on the checkout step — required for PR mode so the action can access the base version of changed files

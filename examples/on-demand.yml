@@ -24,4 +24,4 @@ jobs:
           api_key: ${{ secrets.HOSHO_API_KEY }}
           api_url: ${{ secrets.HOSHO_API_URL }}
           prompt_file: ${{ github.event.inputs.prompt_file }}
-          # system_overview: docs/system-overview.md   # Optional — see README for details
+          # system_overview: docs/system-overview.md   # Optional — see step 4 in README
