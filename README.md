@@ -79,7 +79,7 @@ jobs:
         with:
           api_key: ${{ secrets.HOSHO_API_KEY }}
           api_url: ${{ secrets.HOSHO_API_URL }}
-          prompt_path: prompts/   # Must match the paths: filter above
+          prompt_path: prompts/   # Same directory you listed under paths: above
           # system_overview: docs/system-overview.md   # Optional — see step 4
 ```
 
@@ -87,17 +87,7 @@ That's it. Every PR that changes files in `prompts/` will now get an automated r
 
 A copy of this workflow is also available at [`examples/pr-review.yml`](examples/pr-review.yml).
 
-#### On-demand mode (optional)
-
-To evaluate a prompt without opening a PR, add a second workflow — see [`examples/on-demand.yml`](examples/on-demand.yml) for the complete file.
-
-To run it: go to the **Actions** tab in your GitHub repo → select **Prompt Review (On-Demand)** → click **Run workflow** → enter the path to your prompt file → click the green **Run workflow** button. Results appear in the Job Summary for that run.
-
-### Verify it works
-
-**PR mode:** Create a branch, add or edit a file in your `prompts/` directory, and open a pull request. A review comment will appear within 1-2 minutes.
-
-**On-demand mode:** Go to the **Actions** tab → select the on-demand workflow → click **Run workflow** → enter a prompt file path. Results appear in the Job Summary.
+> **Note:** Make sure `prompt_path` points to the same directory as the `paths:` trigger at the top of the workflow, so the action reviews the same files that triggered it.
 
 ### 4. (Optional) Add a system overview
 
@@ -139,6 +129,18 @@ Example format:
 ## Data Flow
 User → Requirements Gatherer → Planner → Builder → Reviewer → User
 ```
+
+### 5. (Optional) Set up on-demand mode
+
+To evaluate a prompt without opening a PR, add a second workflow — see [`examples/on-demand.yml`](examples/on-demand.yml) for the complete file.
+
+To run it: go to the **Actions** tab in your GitHub repo → select **Prompt Review (On-Demand)** → click **Run workflow** → enter the path to your prompt file → click the green **Run workflow** button. Results appear in the Job Summary for that run.
+
+### Verify it works
+
+**PR mode:** Create a branch, add or edit a file in your `prompts/` directory, and open a pull request. A review comment will appear within 1-2 minutes.
+
+**On-demand mode:** Go to the **Actions** tab → select the on-demand workflow → click **Run workflow** → enter a prompt file path. Results appear in the Job Summary.
 
 ---
 
@@ -199,10 +201,3 @@ See [`examples/on-demand.yml`](examples/on-demand.yml) for a complete workflow.
 | No PR comment appears but action succeeds | Check that `GITHUB_TOKEN` has write permissions and the workflow has the permissions block |
 | Action times out | Evaluations take 60-90 seconds per file. If reviewing many files, consider splitting into smaller PRs |
 
----
-
-## Requirements
-
-- **API key and URL** from Hosho
-- **`GITHUB_TOKEN`** — automatically provided by GitHub Actions, but your workflow must declare `pull-requests: write` and `issues: write` permissions for PR mode
-- **`fetch-depth: 0`** on the checkout step — required for PR mode so the action can access the base version of changed files
