@@ -147,7 +147,12 @@ async function runPRMode(
 
   // Step 6: Post review verdict
   const anyCritical = comparisons.some((c) => c.hasCriticalIssue);
-  await postReviewVerdict(octokit, owner, repo, pullNumber, headSha, anyCritical);
+  const anyRegression = comparisons.some((c) =>
+    c.synthesis.factorInsights.some(f =>
+      f.changeDirection === 'worse' || f.changeDirection === 'mixed'
+    )
+  );
+  await postReviewVerdict(octokit, owner, repo, pullNumber, headSha, anyCritical || anyRegression);
 
   // Step 7: Write Job Summary
   core.info('Writing Job Summary...');

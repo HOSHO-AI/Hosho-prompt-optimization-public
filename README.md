@@ -75,17 +75,29 @@ jobs:
 
       - uses: HOSHO-AI/Hosho-prompt-optimization-public@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # Provided automatically by GitHub — do not create this secret
         with:
           api_key: ${{ secrets.HOSHO_API_KEY }}
           api_url: ${{ secrets.HOSHO_API_URL }}
-          prompt_path: prompts/
+          prompt_path: prompts/   # Must match the paths: filter above
           # system_overview: docs/system-overview.md   # Optional — see step 4
 ```
 
 That's it. Every PR that changes files in `prompts/` will now get an automated review comment.
 
-For on-demand mode (manual trigger to evaluate any prompt file), see [`examples/on-demand.yml`](examples/on-demand.yml).
+A copy of this workflow is also available at [`examples/pr-review.yml`](examples/pr-review.yml).
+
+#### On-demand mode (optional)
+
+To evaluate a prompt without opening a PR, add a second workflow — see [`examples/on-demand.yml`](examples/on-demand.yml) for the complete file.
+
+To run it: go to the **Actions** tab in your GitHub repo → select **Prompt Review (On-Demand)** → click **Run workflow** → enter the path to your prompt file → click the green **Run workflow** button. Results appear in the Job Summary for that run.
+
+### Verify it works
+
+**PR mode:** Create a branch, add or edit a file in your `prompts/` directory, and open a pull request. A review comment will appear within 1-2 minutes.
+
+**On-demand mode:** Go to the **Actions** tab → select the on-demand workflow → click **Run workflow** → enter a prompt file path. Results appear in the Job Summary.
 
 ### 4. (Optional) Add a system overview
 

@@ -30,7 +30,7 @@ function getChangeEmoji(direction: 'improved' | 'no-change' | 'worse' | 'mixed')
 
 /**
  * Generates PR review verdict based on change direction.
- * In PR mode: REJECT if anything got worse, ACCEPT otherwise (even with remaining gaps)
+ * In PR mode: REJECT if anything got worse or had mixed changes, ACCEPT otherwise
  * Returns empty string in on-demand mode (no verdict needed)
  */
 function formatPRVerdict(factorInsights: FactorInsight[]): string {
@@ -41,15 +41,33 @@ function formatPRVerdict(factorInsights: FactorInsight[]): string {
     return ''; // On-demand mode - no verdict
   }
 
-  // Check for regressions
+  // Check for any regressions (worse OR mixed)
   const worseFactors = factorInsights.filter(f => f.changeDirection === 'worse');
+  const mixedFactors = factorInsights.filter(f => f.changeDirection === 'mixed');
+  const regressingFactors = [...worseFactors, ...mixedFactors];
 
-  if (worseFactors.length > 0) {
-    const factorNames = worseFactors.map(f => f.factorName).join(', ');
-    return `**Review verdict:** ⛔ REJECT — Changes introduced regressions in: ${factorNames}\n\n`;
+  if (regressingFactors.length > 0) {
+    // Build specific regression message
+    const parts: string[] = [];
+    if (worseFactors.length > 0) {
+      parts.push(`${worseFactors.map(f => f.factorName).join(', ')} regressed`);
+    }
+    if (mixedFactors.length > 0) {
+      parts.push(`${mixedFactors.map(f => f.factorName).join(', ')} had mixed changes (includes regressions)`);
+    }
+
+    let verdict = `**Review verdict:** ⛔ REJECT — ${parts.join('; ')}.`;
+
+    // Note what would be accepted
+    const improvedFactors = factorInsights.filter(f => f.changeDirection === 'improved');
+    if (improvedFactors.length > 0) {
+      verdict += ` Remaining changes improve quality and would be accepted.`;
+    }
+
+    return verdict + '\n\n';
   }
 
-  // No regressions - accept with remaining issues count
+  // No regressions — APPROVE with remaining issues count
   const remainingIssues = factorInsights.filter(f => f.score <= 4).length;  // 1-4 is red zone
   const opportunities = factorInsights.filter(f => f.score >= 5 && f.score <= 7).length;  // 5-7 is yellow zone
 
@@ -66,7 +84,7 @@ function formatPRVerdict(factorInsights: FactorInsight[]): string {
     verdict += ` ${parts.join(' and ')} remain for future work.`;
   }
 
-  return verdict + `\n\n`;
+  return verdict + '\n\n';
 }
 
 /**

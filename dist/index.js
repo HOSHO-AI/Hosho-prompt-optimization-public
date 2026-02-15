@@ -357,7 +357,8 @@ async function runPRMode(apiKey, apiUrl, promptPath, systemOverview) {
     await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
     // Step 6: Post review verdict
     const anyCritical = comparisons.some((c) => c.hasCriticalIssue);
-    await postReviewVerdict(octokit, owner, repo, pullNumber, headSha, anyCritical);
+    const anyRegression = comparisons.some((c) => c.synthesis.factorInsights.some(f => f.changeDirection === 'worse' || f.changeDirection === 'mixed'));
+    await postReviewVerdict(octokit, owner, repo, pullNumber, headSha, anyCritical || anyRegression);
     // Step 7: Write Job Summary
     core.info('Writing Job Summary...');
     const summaryBody = (0, output_formatter_1.formatJobSummary)(comparisons, 'claude-opus-4-6');
@@ -483,7 +484,7 @@ function getChangeEmoji(direction) {
 }
 /**
  * Generates PR review verdict based on change direction.
- * In PR mode: REJECT if anything got worse, ACCEPT otherwise (even with remaining gaps)
+ * In PR mode: REJECT if anything got worse or had mixed changes, ACCEPT otherwise
  * Returns empty string in on-demand mode (no verdict needed)
  */
 function formatPRVerdict(factorInsights) {
@@ -492,13 +493,28 @@ function formatPRVerdict(factorInsights) {
     if (!isPRMode) {
         return ''; // On-demand mode - no verdict
     }
-    // Check for regressions
+    // Check for any regressions (worse OR mixed)
     const worseFactors = factorInsights.filter(f => f.changeDirection === 'worse');
-    if (worseFactors.length > 0) {
-        const factorNames = worseFactors.map(f => f.factorName).join(', ');
-        return `**Review verdict:** ⛔ REJECT — Changes introduced regressions in: ${factorNames}\n\n`;
+    const mixedFactors = factorInsights.filter(f => f.changeDirection === 'mixed');
+    const regressingFactors = [...worseFactors, ...mixedFactors];
+    if (regressingFactors.length > 0) {
+        // Build specific regression message
+        const parts = [];
+        if (worseFactors.length > 0) {
+            parts.push(`${worseFactors.map(f => f.factorName).join(', ')} regressed`);
+        }
+        if (mixedFactors.length > 0) {
+            parts.push(`${mixedFactors.map(f => f.factorName).join(', ')} had mixed changes (includes regressions)`);
+        }
+        let verdict = `**Review verdict:** ⛔ REJECT — ${parts.join('; ')}.`;
+        // Note what would be accepted
+        const improvedFactors = factorInsights.filter(f => f.changeDirection === 'improved');
+        if (improvedFactors.length > 0) {
+            verdict += ` Remaining changes improve quality and would be accepted.`;
+        }
+        return verdict + '\n\n';
     }
-    // No regressions - accept with remaining issues count
+    // No regressions — APPROVE with remaining issues count
     const remainingIssues = factorInsights.filter(f => f.score <= 4).length; // 1-4 is red zone
     const opportunities = factorInsights.filter(f => f.score >= 5 && f.score <= 7).length; // 5-7 is yellow zone
     let verdict = `**Review verdict:** ✅ APPROVE — Changes improve or maintain quality.`;
@@ -512,7 +528,7 @@ function formatPRVerdict(factorInsights) {
         }
         verdict += ` ${parts.join(' and ')} remain for future work.`;
     }
-    return verdict + `\n\n`;
+    return verdict + '\n\n';
 }
 /**
  * Removes common section header patterns from code snippets to reduce user confusion.

@@ -70,7 +70,7 @@ export interface FactorInsight {
   scoreLabel: string;
   findings: Finding[];
 
-  changeDirection?: 'improved' | 'no-change' | 'worse';
+  changeDirection?: 'improved' | 'no-change' | 'worse' | 'mixed';
   changeRationale?: string;
   changeDetails?: string[];
 }
