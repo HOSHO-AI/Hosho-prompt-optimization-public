@@ -22,10 +22,10 @@ function getTrafficLightEmoji(score: number): string {
  * Returns change emoji/label based on change direction.
  */
 function getChangeEmoji(direction: 'improved' | 'no-change' | 'worse' | 'mixed'): string {
-  if (direction === 'improved') return '✅ Improved';
-  if (direction === 'worse') return '⚠️ Worse';
-  if (direction === 'mixed') return '🔄 Mixed';
-  return '➖ No change';
+  if (direction === 'improved') return '✅<br>Improved';
+  if (direction === 'worse') return '⚠️<br>Worse';
+  if (direction === 'mixed') return '🔄<br>Mixed';
+  return '➖<br>No change';
 }
 
 /**
@@ -278,10 +278,10 @@ function formatEvaluationTable(
 
   if (isPRMode) {
     md += `| Factor | Factor Assessment | Impact of PR | Rationale |\n`;
-    md += `|--------|-------------------|--------------|-----------|`;
+    md += `|--------|:-----------------:|:------------:|-----------|`;
   } else {
     md += `| Factor | Factor Assessment | Rationale |\n`;
-    md += `|--------|-------------------|-----------|`;
+    md += `|--------|:-----------------:|-----------|`;
   }
 
   for (const factor of factorResults) {
@@ -437,8 +437,7 @@ function formatFactorFindings(
 // ---- Job Summary (PR mode) ----
 
 export function formatJobSummary(
-  comparisons: ComparisonResult[],
-  model: string
+  comparisons: ComparisonResult[]
 ): string {
   const fileCount = comparisons.length;
   const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
@@ -460,8 +459,7 @@ export function formatJobSummary(
 
 export function formatOnDemandSummary(
   synthesis: SynthesisResult,
-  factorResults: FactorEvaluationResult[],
-  model: string
+  factorResults: FactorEvaluationResult[]
 ): string {
   const factorCount = factorResults.length;
 

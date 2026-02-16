@@ -2,23 +2,116 @@ require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
 /***/ 4427:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.callReviewAPI = callReviewAPI;
-async function callReviewAPI(apiUrl, request) {
-    const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-        throw new Error(data.message || `API error: ${response.status}`);
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
     }
-    return data;
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DEFAULT_API_URL = void 0;
+exports.callReviewAPI = callReviewAPI;
+const core = __importStar(__nccwpck_require__(7484));
+const DEFAULT_API_URL = 'https://2pdp5lkd4g5a4hi3aigcdxighe0ebgjy.lambda-url.us-east-1.on.aws/';
+exports.DEFAULT_API_URL = DEFAULT_API_URL;
+const MAX_RETRIES = 3;
+const BACKOFF_DELAYS_MS = [5000, 10000, 20000]; // 5s, 10s, 20s
+async function callReviewAPI(apiUrl, request, timeoutMs = 180_000) {
+    let lastError = null;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request),
+                signal: controller.signal,
+            });
+            clearTimeout(timer);
+            // Don't retry 4xx — auth/validation errors won't self-heal
+            if (response.status >= 400 && response.status < 500) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.message || `API error: ${response.status}`);
+            }
+            // Retry 5xx — server/Lambda transient errors
+            if (response.status >= 500) {
+                lastError = new Error(`API returned ${response.status}`);
+                if (attempt < MAX_RETRIES - 1) {
+                    const delay = BACKOFF_DELAYS_MS[attempt];
+                    core.warning(`API call failed (attempt ${attempt + 1}/${MAX_RETRIES}): ${lastError.message}. Retrying in ${delay / 1000}s...`);
+                    await sleep(delay);
+                    continue;
+                }
+                throw lastError;
+            }
+            const data = await response.json();
+            return data;
+        }
+        catch (error) {
+            clearTimeout(timer);
+            lastError = error instanceof Error ? error : new Error(String(error));
+            // Retry on timeout/abort and network errors
+            if (isRetryableError(error)) {
+                if (attempt < MAX_RETRIES - 1) {
+                    const delay = BACKOFF_DELAYS_MS[attempt];
+                    core.warning(`API call failed (attempt ${attempt + 1}/${MAX_RETRIES}): ${lastError.message}. Retrying in ${delay / 1000}s...`);
+                    await sleep(delay);
+                    continue;
+                }
+            }
+            throw lastError;
+        }
+    }
+    throw lastError ?? new Error('All retry attempts exhausted');
+}
+function isRetryableError(error) {
+    if (error instanceof DOMException && error.name === 'AbortError')
+        return true;
+    if (error instanceof TypeError && error.message.includes('fetch'))
+        return true;
+    if (error instanceof Error) {
+        return (error.message.includes('ECONNRESET') ||
+            error.message.includes('ETIMEDOUT') ||
+            error.message.includes('socket hang up') ||
+            error.message.includes('network') ||
+            error.name === 'AbortError');
+    }
+    return false;
+}
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 //# sourceMappingURL=api-client.js.map
 
@@ -251,10 +344,11 @@ async function run() {
     try {
         // Read inputs
         const apiKey = core.getInput('api_key', { required: true });
-        const apiUrl = core.getInput('api_url', { required: true });
+        const apiUrl = core.getInput('api_url') || api_client_1.DEFAULT_API_URL;
         const promptFile = core.getInput('prompt_file');
         const promptPath = core.getInput('prompt_path') || 'prompts/';
         const systemOverviewPath = core.getInput('system_overview');
+        const timeoutMs = parseInt(core.getInput('timeout') || '180', 10) * 1000;
         // Mask the API key in logs
         core.setSecret(apiKey);
         // Read system overview file if provided
@@ -274,10 +368,10 @@ async function run() {
         const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target';
         core.info(`Mode: ${isPRMode ? 'Pull Request' : 'On-Demand'}`);
         if (isPRMode) {
-            await runPRMode(apiKey, apiUrl, promptPath, systemOverview);
+            await runPRMode(apiKey, apiUrl, promptPath, systemOverview, timeoutMs);
         }
         else {
-            await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview);
+            await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
         }
     }
     catch (error) {
@@ -286,7 +380,7 @@ async function run() {
     }
 }
 // ---- PR Mode ----
-async function runPRMode(apiKey, apiUrl, promptPath, systemOverview) {
+async function runPRMode(apiKey, apiUrl, promptPath, systemOverview, timeoutMs) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
         throw new Error('GITHUB_TOKEN environment variable is required for PR mode');
@@ -331,7 +425,7 @@ async function runPRMode(apiKey, apiUrl, promptPath, systemOverview) {
             repository: `${owner}/${repo}`,
             prNumber: pullNumber,
         },
-    });
+    }, timeoutMs);
     if (apiResponse.status !== 'success' || !apiResponse.results) {
         throw new Error(`API returned error: ${apiResponse.message || 'Unknown error'}`);
     }
@@ -361,7 +455,7 @@ async function runPRMode(apiKey, apiUrl, promptPath, systemOverview) {
     await postReviewVerdict(octokit, owner, repo, pullNumber, headSha, anyCritical || anyRegression);
     // Step 7: Write Job Summary
     core.info('Writing Job Summary...');
-    const summaryBody = (0, output_formatter_1.formatJobSummary)(comparisons, 'claude-opus-4-6');
+    const summaryBody = (0, output_formatter_1.formatJobSummary)(comparisons);
     await core.summary.addRaw(summaryBody).write();
     // Step 8: Set outputs
     const overallScores = comparisons.map((c) => c.synthesis.overallScore);
@@ -370,7 +464,7 @@ async function runPRMode(apiKey, apiUrl, promptPath, systemOverview) {
     core.info('Done.');
 }
 // ---- On-Demand Mode ----
-async function runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview) {
+async function runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs) {
     if (!promptFile) {
         throw new Error('prompt_file input is required for on-demand mode (workflow_dispatch)');
     }
@@ -391,14 +485,14 @@ async function runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview) {
                 after: content,
                 before: null,
             }],
-    });
+    }, timeoutMs);
     if (apiResponse.status !== 'success' || !apiResponse.results || apiResponse.results.length === 0) {
         throw new Error(`API returned error: ${apiResponse.message || 'Unknown error'}`);
     }
     const result = apiResponse.results[0];
     // Write Job Summary
     core.info('Writing Job Summary...');
-    const summaryBody = (0, output_formatter_1.formatOnDemandSummary)(result.synthesis, result.factorResults, 'claude-opus-4-6');
+    const summaryBody = (0, output_formatter_1.formatOnDemandSummary)(result.synthesis, result.factorResults);
     await core.summary.addRaw(summaryBody).write();
     // Set outputs
     core.setOutput('overall_score', result.synthesis.overallScore);
@@ -475,12 +569,12 @@ function getTrafficLightEmoji(score) {
  */
 function getChangeEmoji(direction) {
     if (direction === 'improved')
-        return '✅ Improved';
+        return '✅<br>Improved';
     if (direction === 'worse')
-        return '⚠️ Worse';
+        return '⚠️<br>Worse';
     if (direction === 'mixed')
-        return '🔄 Mixed';
-    return '➖ No change';
+        return '🔄<br>Mixed';
+    return '➖<br>No change';
 }
 /**
  * Generates PR review verdict based on change direction.
@@ -683,20 +777,19 @@ function formatEvaluationTable(factorResults, factorInsights) {
     const isPRMode = factorInsights.some(f => f.changeDirection);
     if (isPRMode) {
         md += `| Factor | Factor Assessment | Impact of PR | Rationale |\n`;
-        md += `|--------|-------------------|--------------|-----------|`;
+        md += `|--------|:-----------------:|:------------:|-----------|`;
     }
     else {
         md += `| Factor | Factor Assessment | Rationale |\n`;
-        md += `|--------|-------------------|-----------|`;
+        md += `|--------|:-----------------:|-----------|`;
     }
     for (const factor of factorResults) {
         const emoji = getTrafficLightEmoji(factor.score);
         const insight = factorInsights.find(f => f.factorId === factor.factorId);
         let rationale = factor.tableRationale;
-        // In PR mode, prepend change rationale with full stop separator
+        // In PR mode, show factor assessment and PR impact as labeled lines
         if (isPRMode && insight?.changeRationale) {
-            const separator = insight.changeRationale.endsWith('.') ? ' ' : '. ';
-            rationale = `${insight.changeRationale}${separator}${factor.tableRationale}`;
+            rationale = `**Factor assessment:** ${factor.tableRationale}<br>**Impact of PR:** ${insight.changeRationale}`;
         }
         // Escape pipe characters to prevent breaking table columns
         const safeRationale = rationale.replace(/\|/g, '\\|');
@@ -807,7 +900,7 @@ function formatFactorFindings(factor, promptFile) {
     return md;
 }
 // ---- Job Summary (PR mode) ----
-function formatJobSummary(comparisons, model) {
+function formatJobSummary(comparisons) {
     const fileCount = comparisons.length;
     const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
     let md = `# PROMPT REVIEW\n\n`;
@@ -821,7 +914,7 @@ function formatJobSummary(comparisons, model) {
     return md;
 }
 // ---- On-Demand Summary ----
-function formatOnDemandSummary(synthesis, factorResults, model) {
+function formatOnDemandSummary(synthesis, factorResults) {
     const factorCount = factorResults.length;
     let md = `# PROMPT REVIEW\n\n`;
     md += `Reviewed 1 prompt file against ${factorCount} factors.\n`;

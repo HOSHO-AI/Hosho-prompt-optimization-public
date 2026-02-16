@@ -37,16 +37,15 @@ A GitHub Action that evaluates AI agent prompts against 6 prompt engineering qua
 
 ### 1. Get your API key
 
-Contact Hosho to receive your API key and endpoint URL.
+Contact Hosho to receive your API key.
 
-### 2. Store them as secrets in your repo
+### 2. Store it as a secret in your repo
 
-In your GitHub repo, go to **Settings > Secrets and variables > Actions > New repository secret** and add two secrets:
+In your GitHub repo, go to **Settings > Secrets and variables > Actions > New repository secret** and add:
 
 | Secret name | Value |
 |-------------|-------|
 | `HOSHO_API_KEY` | The API key you received |
-| `HOSHO_API_URL` | The endpoint URL you received |
 
 ### 3. Create a workflow file
 
@@ -79,7 +78,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # Provided automatically by GitHub — do not create this secret
         with:
           api_key: ${{ secrets.HOSHO_API_KEY }}
-          api_url: ${{ secrets.HOSHO_API_URL }}
           prompt_path: prompts/   # Same directory you listed under paths: above
           # system_overview: docs/system-overview.md   # Optional — see step 4
 ```
@@ -150,10 +148,11 @@ To run it: go to the **Actions** tab in your GitHub repo → select **Prompt Rev
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `api_key` | Yes | — | Hosho API key |
-| `api_url` | Yes | — | API endpoint URL |
 | `prompt_file` | No | `''` | Path to a specific prompt file (on-demand mode) |
 | `prompt_path` | No | `prompts/` | Directory prefix for identifying prompt files in PRs |
 | `system_overview` | No | `''` | Path to a system overview markdown file |
+| `api_url` | No | Built-in | API endpoint URL — override for enterprise/self-hosted deployments |
+| `timeout` | No | `180` | API call timeout in seconds |
 
 ## Outputs
 
@@ -213,10 +212,9 @@ When the action runs, it sends the following to the Hosho API:
 
 | Problem | Fix |
 |---------|-----|
-| `401 Unauthorized` from API | Check that `HOSHO_API_KEY` and `HOSHO_API_URL` secrets are set correctly in your repo |
+| `401 Unauthorized` from API | Check that `HOSHO_API_KEY` is set correctly in your repo secrets |
 | "GITHUB_TOKEN environment variable is required" | Add `env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` to the action step |
 | "fatal: bad revision" or "path not found" in logs | Add `fetch-depth: 0` to your `actions/checkout` step |
 | "Resource not accessible by integration" (403) | Add `permissions: pull-requests: write` and `issues: write` to the workflow |
 | No PR comment appears but action succeeds | Check that `GITHUB_TOKEN` has write permissions and the workflow has the permissions block |
-| Action times out | Evaluations take 60-90 seconds per file. If reviewing many files, consider splitting into smaller PRs |
-
+| Action times out | Default timeout is 180s (3 minutes). Evaluations take 60-90 seconds per file. For many files, increase with `timeout: 300` |

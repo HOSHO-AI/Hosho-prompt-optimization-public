@@ -11,8 +11,9 @@ inputs:
     description: 'Hosho Prompt Reviewer API key'
     required: true
   api_url:
-    description: 'API endpoint URL'
-    required: true
+    description: 'API endpoint URL (override for enterprise/self-hosted deployments)'
+    required: false
+    default: ''
   prompt_file:
     description: 'Path to specific prompt file to review (on-demand mode only)'
     required: false
@@ -25,6 +26,10 @@ inputs:
     description: 'Path to system overview markdown file describing the multi-agent pipeline (optional)'
     required: false
     default: ''
+  timeout:
+    description: 'API call timeout in seconds'
+    required: false
+    default: '180'
 
 outputs:
   overall_score:

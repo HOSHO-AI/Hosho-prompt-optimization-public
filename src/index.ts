@@ -4,7 +4,7 @@ import { basename } from 'path';
 import { readFileSync } from 'fs';
 import { identifyChangedPromptFiles } from './file-identifier';
 import { fetchFileVersions, fetchFileFromDisk } from './file-fetcher';
-import { callReviewAPI, ReviewAPIRequest } from './api-client';
+import { callReviewAPI, ReviewAPIRequest, DEFAULT_API_URL } from './api-client';
 import {
   formatPRComment,
   formatJobSummary,
@@ -17,10 +17,11 @@ async function run(): Promise<void> {
   try {
     // Read inputs
     const apiKey = core.getInput('api_key', { required: true });
-    const apiUrl = core.getInput('api_url', { required: true });
+    const apiUrl = core.getInput('api_url') || DEFAULT_API_URL;
     const promptFile = core.getInput('prompt_file');
     const promptPath = core.getInput('prompt_path') || 'prompts/';
     const systemOverviewPath = core.getInput('system_overview');
+    const timeoutMs = parseInt(core.getInput('timeout') || '180', 10) * 1000;
 
     // Mask the API key in logs
     core.setSecret(apiKey);
@@ -44,9 +45,9 @@ async function run(): Promise<void> {
     core.info(`Mode: ${isPRMode ? 'Pull Request' : 'On-Demand'}`);
 
     if (isPRMode) {
-      await runPRMode(apiKey, apiUrl, promptPath, systemOverview);
+      await runPRMode(apiKey, apiUrl, promptPath, systemOverview, timeoutMs);
     } else {
-      await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview);
+      await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -60,7 +61,8 @@ async function runPRMode(
   apiKey: string,
   apiUrl: string,
   promptPath: string,
-  systemOverview: string
+  systemOverview: string,
+  timeoutMs: number
 ): Promise<void> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -118,7 +120,7 @@ async function runPRMode(
       repository: `${owner}/${repo}`,
       prNumber: pullNumber,
     },
-  });
+  }, timeoutMs);
 
   if (apiResponse.status !== 'success' || !apiResponse.results) {
     throw new Error(`API returned error: ${apiResponse.message || 'Unknown error'}`);
@@ -156,7 +158,7 @@ async function runPRMode(
 
   // Step 7: Write Job Summary
   core.info('Writing Job Summary...');
-  const summaryBody = formatJobSummary(comparisons, 'claude-opus-4-6');
+  const summaryBody = formatJobSummary(comparisons);
   await core.summary.addRaw(summaryBody).write();
 
   // Step 8: Set outputs
@@ -173,7 +175,8 @@ async function runOnDemandMode(
   apiKey: string,
   apiUrl: string,
   promptFile: string,
-  systemOverview: string
+  systemOverview: string,
+  timeoutMs: number
 ): Promise<void> {
   if (!promptFile) {
     throw new Error('prompt_file input is required for on-demand mode (workflow_dispatch)');
@@ -198,7 +201,7 @@ async function runOnDemandMode(
       after: content,
       before: null,
     }],
-  });
+  }, timeoutMs);
 
   if (apiResponse.status !== 'success' || !apiResponse.results || apiResponse.results.length === 0) {
     throw new Error(`API returned error: ${apiResponse.message || 'Unknown error'}`);
@@ -208,7 +211,7 @@ async function runOnDemandMode(
 
   // Write Job Summary
   core.info('Writing Job Summary...');
-  const summaryBody = formatOnDemandSummary(result.synthesis, result.factorResults, 'claude-opus-4-6');
+  const summaryBody = formatOnDemandSummary(result.synthesis, result.factorResults);
   await core.summary.addRaw(summaryBody).write();
 
   // Set outputs
