@@ -1,5 +1,5 @@
-name: 'Prompt Factor Reviewer'
-description: 'Evaluates AI agent prompts against 6 prompt factors using the Hosho review API'
+name: 'Prompt Reviewer'
+description: 'Evaluates AI agent prompts against 6 prompt quality factors using the Hosho review API'
 author: 'Hosho'
 
 branding:

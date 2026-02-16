@@ -1,4 +1,5 @@
 name: Prompt Review (On-Demand)
+run-name: "Prompt Review — ${{ inputs.prompt_file }}"
 
 on:
   workflow_dispatch:

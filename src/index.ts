@@ -257,8 +257,8 @@ async function postReviewVerdict(
 
     const event = hasCriticalIssues ? 'REQUEST_CHANGES' : 'COMMENT';
     const body = hasCriticalIssues
-      ? 'Prompt Factor Review found critical issues. See the review comment above for details.'
-      : 'Prompt Factor Review complete. See the review comment above for details.';
+      ? 'Prompt Review found critical issues. See the review comment above for details.'
+      : 'Prompt Review complete. See the review comment above for details.';
 
     await octokit.rest.pulls.createReview({
       owner, repo, pull_number: pullNumber,

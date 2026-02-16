@@ -129,6 +129,15 @@ function cleanCodeSnippet(code: string): string {
 }
 
 /**
+ * Escapes triple backtick sequences in plain text to prevent
+ * accidental code block creation inside <details> blocks.
+ */
+function sanitizeInlineText(text: string): string {
+  if (!text) return text;
+  return text.replace(/`{3,}/g, (match) => '\\`'.repeat(match.length));
+}
+
+/**
  * Returns a code fence delimiter that won't conflict with content.
  * If content contains ```, uses ```` (4 backticks), etc.
  */
@@ -192,6 +201,23 @@ function isSectionHeader(line: string): boolean {
   return false;
 }
 
+/**
+ * Merges authoritative findings from factorResults into factorInsights.
+ * Synthesis may drop or fail to copy findings — factorResults are the source of truth.
+ */
+function mergeFindings(
+  factorInsights: FactorInsight[],
+  factorResults: FactorEvaluationResult[]
+): FactorInsight[] {
+  return factorInsights.map(insight => {
+    const result = factorResults.find(fr => fr.factorId === insight.factorId);
+    if (result) {
+      return { ...insight, findings: result.findings };
+    }
+    return insight;
+  });
+}
+
 // ---- PR Comment ----
 
 export function formatPRComment(comparisons: ComparisonResult[]): string {
@@ -199,7 +225,7 @@ export function formatPRComment(comparisons: ComparisonResult[]): string {
   const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
 
   let md = `${BOT_MARKER}\n`;
-  md += `# PROMPT FACTOR REVIEW\n\n`;
+  md += `# PROMPT REVIEW\n\n`;
   md += `Reviewed ${fileCount} prompt file(s) against ${factorCount} factors.\n\n`;
   md += `---\n\n`;
 
@@ -218,19 +244,27 @@ export function formatPRComment(comparisons: ComparisonResult[]): string {
 }
 
 function formatFileSection(comp: ComparisonResult): string {
+  const enrichedInsights = mergeFindings(comp.synthesis.factorInsights, comp.factorResults);
+
   let md = formatPromptHeader(comp.promptFile, comp.synthesis.promptDescription);
-  md += formatEvaluationTable(comp.factorResults, comp.synthesis.factorInsights);
+  md += formatEvaluationTable(comp.factorResults, enrichedInsights);
 
   // Add PR verdict right after table (PR mode only)
-  md += formatPRVerdict(comp.synthesis.factorInsights);
+  md += formatPRVerdict(enrichedInsights);
 
-  md += formatRecommendations(comp.synthesis.factorInsights, comp.promptFile);
+  md += formatRecommendations(enrichedInsights, comp.promptFile);
 
   return md;
 }
 
 function formatPromptHeader(promptFile: string, description: string): string {
-  return `## \`${promptFile}\`\n\n**Prompt overview:** ${description}\n\n`;
+  // Strip any markdown code fences/blocks that would break subsequent rendering
+  const safeDescription = description
+    .replace(/```[\s\S]*?```/g, '')  // Strip code blocks
+    .replace(/`{3,}/g, '')           // Strip orphan fence markers
+    .replace(/\n/g, ' ')             // Collapse to single line
+    .trim();
+  return `## \`${promptFile}\`\n\n**Prompt overview:** ${safeDescription}\n\n`;
 }
 
 function formatEvaluationTable(
@@ -262,11 +296,14 @@ function formatEvaluationTable(
       rationale = `${insight.changeRationale}${separator}${factor.tableRationale}`;
     }
 
+    // Escape pipe characters to prevent breaking table columns
+    const safeRationale = rationale.replace(/\|/g, '\\|');
+
     if (isPRMode && insight?.changeDirection) {
       const changeEmoji = getChangeEmoji(insight.changeDirection);
-      md += `\n| **${factor.factorName}** | ${emoji} | ${changeEmoji} | ${rationale} |`;
+      md += `\n| **${factor.factorName}** | ${emoji} | ${changeEmoji} | ${safeRationale} |`;
     } else {
-      md += `\n| **${factor.factorName}** | ${emoji} | ${rationale} |`;
+      md += `\n| **${factor.factorName}** | ${emoji} | ${safeRationale} |`;
     }
   }
 
@@ -337,7 +374,7 @@ function formatFactorFindings(
     if (hasChanges) {
       // Has meaningful changes - show bullet points
       for (const change of factor.changeDetails!) {
-        md += `- ${change}\n`;
+        md += `- ${sanitizeInlineText(change)}\n`;
       }
     } else {
       // PR mode but no meaningful changes - show brief statement
@@ -367,7 +404,7 @@ function formatFactorFindings(
           : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
 
         // Include full description + "Prompt text example from"
-        md += `**Assessment observation:** ${finding.description}. Prompt text example from \`${promptFile}:${lineRef}\`\n\n`;
+        md += `**Assessment observation:** ${sanitizeInlineText(finding.description)}. Prompt text example from \`${promptFile}:${lineRef}\`\n\n`;
 
         // Clean section headers from code
         const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
@@ -380,7 +417,7 @@ function formatFactorFindings(
       }
 
       // Recommendation
-      md += `**Consideration:** ${finding.consideration}\n\n`;
+      md += `**Consideration:** ${sanitizeInlineText(finding.consideration)}\n\n`;
 
       // Proposed prompt edit (if present and not empty)
       if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
@@ -407,9 +444,9 @@ export function formatJobSummary(
   const fileCount = comparisons.length;
   const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
 
-  let md = `# PROMPT FACTOR REVIEW\n\n`;
+  let md = `# PROMPT REVIEW\n\n`;
   md += `Reviewed ${fileCount} prompt file(s) against ${factorCount} factors.\n`;
-  md += `Mode: Pull Request · Model: ${model}\n\n`;
+  md += `Mode: Pull Request\n\n`;
   md += `---\n\n`;
 
   for (const comp of comparisons) {
@@ -429,14 +466,16 @@ export function formatOnDemandSummary(
 ): string {
   const factorCount = factorResults.length;
 
-  let md = `# PROMPT FACTOR REVIEW\n\n`;
+  let md = `# PROMPT REVIEW\n\n`;
   md += `Reviewed 1 prompt file against ${factorCount} factors.\n`;
-  md += `Mode: On-Demand · Model: ${model}\n\n`;
+  md += `Mode: On-Demand\n\n`;
   md += `---\n\n`;
 
+  const enrichedInsights = mergeFindings(synthesis.factorInsights, factorResults);
+
   md += formatPromptHeader(synthesis.promptFile, synthesis.promptDescription);
-  md += formatEvaluationTable(factorResults, synthesis.factorInsights);
-  md += formatRecommendations(synthesis.factorInsights, synthesis.promptFile);
+  md += formatEvaluationTable(factorResults, enrichedInsights);
+  md += formatRecommendations(enrichedInsights, synthesis.promptFile);
 
   md += `\n---\n\n`;
 
