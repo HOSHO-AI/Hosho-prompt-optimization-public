@@ -290,10 +290,9 @@ function formatEvaluationTable(
 
     let rationale = factor.tableRationale;
 
-    // In PR mode, prepend change rationale with full stop separator
+    // In PR mode, show factor assessment and PR impact as labeled lines
     if (isPRMode && insight?.changeRationale) {
-      const separator = insight.changeRationale.endsWith('.') ? ' ' : '. ';
-      rationale = `${insight.changeRationale}${separator}${factor.tableRationale}`;
+      rationale = `**Factor assessment:** ${factor.tableRationale}<br>**Impact of PR:** ${insight.changeRationale}`;
     }
 
     // Escape pipe characters to prevent breaking table columns
