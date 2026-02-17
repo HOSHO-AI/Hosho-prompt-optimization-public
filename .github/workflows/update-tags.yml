@@ -1,0 +1,29 @@
+name: Update major version tag
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update major version tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # Extract major version (e.g., v1.2.3 → v1)
+          MAJOR=$(echo "$RELEASE_TAG" | grep -oE '^v[0-9]+')
+          if [ -z "$MAJOR" ]; then
+            echo "::error::Release tag '$RELEASE_TAG' does not match vN.x.x format"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "$MAJOR"
+          git push -f origin "$MAJOR"
+          echo "Updated $MAJOR tag to point to $RELEASE_TAG"
