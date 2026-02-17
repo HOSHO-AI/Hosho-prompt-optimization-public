@@ -64,6 +64,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write       # Required — GitHub's PR comment API uses the issues endpoint
+  actions: write      # Optional — enables showing prompt names in the run list
 
 jobs:
   review:
@@ -82,7 +83,7 @@ jobs:
           # system_overview: docs/system-overview.md   # Optional — see step 4
 ```
 
-That's it. Every PR that changes files in `prompts/` will now get an automated review comment. The `run-name` field customizes what appears in the Actions tab run list, so you can see at a glance which PR triggered the review.
+That's it. Every PR that changes files in `prompts/` will now get an automated review comment. The `run-name` field customizes the initial name in the Actions tab run list. With the `actions: write` permission, the action updates the run name to show the actual prompt filenames (e.g., "Prompt Review — agent.md, planner.md — PR #23").
 
 A copy of this workflow is also available at [`examples/pr-review.yml`](examples/pr-review.yml).
 

@@ -402,6 +402,9 @@ async function runPRMode(apiKey, apiUrl, promptPath, systemOverview, timeoutMs) 
         return;
     }
     core.info(`Found ${changedFiles.length} changed prompt file(s): ${changedFiles.map((f) => f.filename).join(', ')}`);
+    // Update workflow run name to show prompt filenames
+    const promptNames = changedFiles.map(f => (0, path_1.basename)(f.filename));
+    await updateWorkflowRunName(promptNames, pullNumber);
     // Step 2: Fetch file content and build API request
     const apiFiles = [];
     for (const change of changedFiles) {
@@ -472,6 +475,8 @@ async function runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeo
     // Read file from disk
     const content = (0, file_fetcher_1.fetchFileFromDisk)(promptFile);
     const promptName = (0, path_1.basename)(promptFile);
+    // Update workflow run name to show prompt filename
+    await updateWorkflowRunName([promptName]);
     // Call Lambda API
     core.info('Calling review API...');
     const apiResponse = await (0, api_client_1.callReviewAPI)(apiUrl, {
@@ -498,6 +503,34 @@ async function runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeo
     core.setOutput('overall_score', result.synthesis.overallScore);
     core.setOutput('review_summary', result.synthesis.promptDescription);
     core.info(`Done. Overall: ${result.synthesis.overallScore}`);
+}
+// ---- Run Name ----
+async function updateWorkflowRunName(promptNames, prNumber) {
+    const token = process.env.GITHUB_TOKEN;
+    if (!token)
+        return;
+    try {
+        const octokit = github.getOctokit(token);
+        const { owner, repo } = github.context.repo;
+        const runId = github.context.runId;
+        let label;
+        if (promptNames.length <= 2) {
+            label = promptNames.join(', ');
+        }
+        else {
+            label = `${promptNames[0]} +${promptNames.length - 1} more`;
+        }
+        const name = prNumber
+            ? `Prompt Review — ${label} — PR #${prNumber}`
+            : `Prompt Review — ${label}`;
+        await octokit.request('PATCH /repos/{owner}/{repo}/actions/runs/{run_id}', {
+            owner, repo, run_id: runId, name,
+        });
+    }
+    catch {
+        // Requires actions:write permission — silent if not granted
+        core.debug('Could not update workflow run name (actions:write permission may not be granted)');
+    }
 }
 // ---- Shared Helpers ----
 async function postOrUpdatePRComment(octokit, owner, repo, pullNumber, body) {

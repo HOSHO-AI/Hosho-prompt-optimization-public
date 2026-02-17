@@ -1,7 +1,12 @@
 name: Test Action (On-Demand)
+run-name: "Test — ${{ inputs.prompt_file || 'test-prompt.md' }}"
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
 
 jobs:
   test-on-demand:

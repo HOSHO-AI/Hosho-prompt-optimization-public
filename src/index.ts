@@ -95,6 +95,10 @@ async function runPRMode(
 
   core.info(`Found ${changedFiles.length} changed prompt file(s): ${changedFiles.map((f) => f.filename).join(', ')}`);
 
+  // Update workflow run name to show prompt filenames
+  const promptNames = changedFiles.map(f => basename(f.filename));
+  await updateWorkflowRunName(promptNames, pullNumber);
+
   // Step 2: Fetch file content and build API request
   const apiFiles: ReviewAPIRequest['files'] = [];
 
@@ -188,6 +192,9 @@ async function runOnDemandMode(
   const content = fetchFileFromDisk(promptFile);
   const promptName = basename(promptFile);
 
+  // Update workflow run name to show prompt filename
+  await updateWorkflowRunName([promptName]);
+
   // Call Lambda API
   core.info('Calling review API...');
   const apiResponse = await callReviewAPI(apiUrl, {
@@ -219,6 +226,40 @@ async function runOnDemandMode(
   core.setOutput('review_summary', result.synthesis.promptDescription);
 
   core.info(`Done. Overall: ${result.synthesis.overallScore}`);
+}
+
+// ---- Run Name ----
+
+async function updateWorkflowRunName(
+  promptNames: string[],
+  prNumber?: number
+): Promise<void> {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return;
+
+  try {
+    const octokit = github.getOctokit(token);
+    const { owner, repo } = github.context.repo;
+    const runId = github.context.runId;
+
+    let label: string;
+    if (promptNames.length <= 2) {
+      label = promptNames.join(', ');
+    } else {
+      label = `${promptNames[0]} +${promptNames.length - 1} more`;
+    }
+
+    const name = prNumber
+      ? `Prompt Review — ${label} — PR #${prNumber}`
+      : `Prompt Review — ${label}`;
+
+    await octokit.request('PATCH /repos/{owner}/{repo}/actions/runs/{run_id}', {
+      owner, repo, run_id: runId, name,
+    });
+  } catch {
+    // Requires actions:write permission — silent if not granted
+    core.debug('Could not update workflow run name (actions:write permission may not be granted)');
+  }
 }
 
 // ---- Shared Helpers ----

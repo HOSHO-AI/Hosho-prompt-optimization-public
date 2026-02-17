@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: write      # Optional — enables showing prompt names in the run list
 
 jobs:
   review:
