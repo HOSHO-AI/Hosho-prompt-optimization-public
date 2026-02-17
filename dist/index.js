@@ -909,7 +909,8 @@ function formatFactorFindings(factor, promptFile) {
                     ? `${finding.codeSnippet.startLine}`
                     : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
                 // Include full description + "Prompt text example from"
-                md += `**Assessment observation:** ${sanitizeInlineText(finding.description)}. Prompt text example from \`${promptFile}:${lineRef}\`\n\n`;
+                const desc = sanitizeInlineText(finding.description).replace(/\.+$/, '');
+                md += `**Assessment observation:** ${desc}. Prompt text example from \`${promptFile}:${lineRef}\`\n\n`;
                 // Clean section headers from code
                 const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
                 // Render code block if non-empty (dynamic fence to avoid nested ``` conflicts)
