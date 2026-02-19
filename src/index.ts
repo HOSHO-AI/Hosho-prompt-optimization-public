@@ -19,7 +19,8 @@ async function run(): Promise<void> {
     const apiKey = core.getInput('api_key', { required: true });
     const apiUrl = core.getInput('api_url') || DEFAULT_API_URL;
     const promptFile = core.getInput('prompt_file');
-    const promptPath = core.getInput('prompt_path') || 'prompts/';
+    const filePattern = core.getInput('file_pattern');
+    const promptPath = core.getInput('prompt_path');
     const systemOverviewPath = core.getInput('system_overview');
     const timeoutMs = parseInt(core.getInput('timeout') || '180', 10) * 1000;
 
@@ -45,7 +46,14 @@ async function run(): Promise<void> {
     core.info(`Mode: ${isPRMode ? 'Pull Request' : 'On-Demand'}`);
 
     if (isPRMode) {
-      await runPRMode(apiKey, apiUrl, promptPath, systemOverview, timeoutMs);
+      if (!filePattern && !promptPath) {
+        throw new Error(
+          'Either file_pattern or prompt_path must be set for PR mode. ' +
+          'Use file_pattern for glob matching (e.g. "**/*system-prompt*.md") ' +
+          'or prompt_path for directory prefix matching (e.g. "prompts/").'
+        );
+      }
+      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs);
     } else {
       await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
     }
@@ -60,6 +68,7 @@ async function run(): Promise<void> {
 async function runPRMode(
   apiKey: string,
   apiUrl: string,
+  filePattern: string,
   promptPath: string,
   systemOverview: string,
   timeoutMs: number
@@ -85,7 +94,8 @@ async function runPRMode(
 
   // Step 1: Identify changed prompt files
   const changedFiles = await identifyChangedPromptFiles(
-    octokit, owner, repo, pullNumber, promptPath
+    octokit, owner, repo, pullNumber,
+    filePattern ? { filePattern } : { promptPath }
   );
 
   if (changedFiles.length === 0) {

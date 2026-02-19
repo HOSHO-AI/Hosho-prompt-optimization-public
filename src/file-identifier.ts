@@ -1,10 +1,19 @@
 import * as github from '@actions/github';
+import { minimatch } from 'minimatch';
 import { PromptFileChange } from './types';
 
 type Octokit = ReturnType<typeof github.getOctokit>;
 
+interface FileFilterOptions {
+  /** Glob pattern to match filenames against (e.g. "**\/*system-prompt*.md") */
+  filePattern?: string;
+  /** Directory prefix to match filenames against (e.g. "prompts/") */
+  promptPath?: string;
+}
+
 /**
- * Identifies which files changed in a PR that match the prompt path prefix.
+ * Identifies which files changed in a PR that match the given filter.
+ * Supports two modes: glob pattern matching or directory prefix matching.
  * Excludes deleted files (nothing to review). Handles renames.
  */
 export async function identifyChangedPromptFiles(
@@ -12,10 +21,9 @@ export async function identifyChangedPromptFiles(
   owner: string,
   repo: string,
   pullNumber: number,
-  promptPath: string
+  options: FileFilterOptions
 ): Promise<PromptFileChange[]> {
-  // Normalize: ensure trailing slash
-  const normalizedPath = promptPath.endsWith('/') ? promptPath : `${promptPath}/`;
+  const matchFile = buildMatcher(options);
 
   // Paginate to handle PRs with >100 changed files
   const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
@@ -28,9 +36,8 @@ export async function identifyChangedPromptFiles(
   const promptFiles: PromptFileChange[] = [];
 
   for (const file of files) {
-    // Check if this file is in the prompt directory
-    const matchesCurrent = file.filename.startsWith(normalizedPath);
-    const matchesPrevious = file.previous_filename?.startsWith(normalizedPath) ?? false;
+    const matchesCurrent = matchFile(file.filename);
+    const matchesPrevious = file.previous_filename ? matchFile(file.previous_filename) : false;
 
     if (!matchesCurrent && !matchesPrevious) {
       continue;
@@ -50,6 +57,16 @@ export async function identifyChangedPromptFiles(
   }
 
   return promptFiles;
+}
+
+function buildMatcher(options: FileFilterOptions): (filename: string) => boolean {
+  if (options.filePattern) {
+    return (filename: string) => minimatch(filename, options.filePattern!);
+  }
+  const normalizedPath = options.promptPath!.endsWith('/')
+    ? options.promptPath!
+    : `${options.promptPath!}/`;
+  return (filename: string) => filename.startsWith(normalizedPath);
 }
 
 function normalizeStatus(

@@ -18,10 +18,14 @@ inputs:
     description: 'Path to specific prompt file to review (on-demand mode only)'
     required: false
     default: ''
-  prompt_path:
-    description: 'Directory prefix for identifying prompt files in PRs'
+  file_pattern:
+    description: 'Glob pattern for identifying prompt files in PRs (e.g. "**/*system-prompt*.md")'
     required: false
-    default: 'prompts/'
+    default: ''
+  prompt_path:
+    description: 'Directory prefix for identifying prompt files in PRs (e.g. "prompts/")'
+    required: false
+    default: ''
   system_overview:
     description: 'Path to system overview markdown file describing the multi-agent pipeline (optional)'
     required: false

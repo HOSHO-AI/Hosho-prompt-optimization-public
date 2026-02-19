@@ -1,10 +1,21 @@
 name: Prompt Review
 run-name: "Prompt Review — PR #${{ github.event.pull_request.number }}"
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Choose ONE trigger pattern below — match it to the action input you use.
+#
+# Option A: Pattern-based — triggers on any file matching a glob pattern
+#   paths: ['**/*system-prompt*.md']        → file_pattern: '**/*system-prompt*.md'
+#
+# Option B: Directory-based — triggers on any file in a directory
+#   paths: ['prompts/**']                   → prompt_path: prompts/
+# ──────────────────────────────────────────────────────────────────────────────
+
 on:
   pull_request:
     paths:
-      - 'prompts/**'   # Adjust to match where your prompt files live
+      - '**/*system-prompt*.md'   # Option A: any file with "system-prompt" in the name
+      # - 'prompts/**'            # Option B: any file in the prompts/ directory
 
 permissions:
   contents: read
@@ -25,5 +36,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           api_key: ${{ secrets.HOSHO_API_KEY }}
-          prompt_path: prompts/
+          file_pattern: '**/*system-prompt*.md'   # Option A
+          # prompt_path: prompts/                  # Option B
           # system_overview: docs/system-overview.md   # Optional — see step 4 in README
