@@ -225,7 +225,7 @@ export function formatPRComment(comparisons: ComparisonResult[]): string {
   const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
 
   let md = `${BOT_MARKER}\n`;
-  md += `# PROMPT REVIEW\n\n`;
+  md += `# Hosho Bot — Prompt Review\n\n`;
   md += `Reviewed ${fileCount} prompt file(s) against ${factorCount} factors.\n\n`;
   md += `---\n\n`;
 
@@ -239,6 +239,8 @@ export function formatPRComment(comparisons: ComparisonResult[]): string {
     md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
     md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
   }
+
+  md += `\n*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
 
   return md;
 }
@@ -443,7 +445,7 @@ export function formatJobSummary(
   const fileCount = comparisons.length;
   const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
 
-  let md = `# PROMPT REVIEW\n\n`;
+  let md = `# Hosho Bot — Prompt Review\n\n`;
   md += `Reviewed ${fileCount} prompt file(s) against ${factorCount} factors.\n`;
   md += `Mode: Pull Request\n\n`;
   md += `---\n\n`;
@@ -464,7 +466,7 @@ export function formatOnDemandSummary(
 ): string {
   const factorCount = factorResults.length;
 
-  let md = `# PROMPT REVIEW\n\n`;
+  let md = `# Hosho Bot — Prompt Review\n\n`;
   md += `Reviewed 1 prompt file against ${factorCount} factors.\n`;
   md += `Mode: On-Demand\n\n`;
   md += `---\n\n`;

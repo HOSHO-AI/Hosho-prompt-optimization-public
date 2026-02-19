@@ -536,8 +536,8 @@ async function updateWorkflowRunName(promptNames, prNumber) {
             label = `${promptNames[0]} +${promptNames.length - 1} more`;
         }
         const name = prNumber
-            ? `Prompt Review — ${label} — PR #${prNumber}`
-            : `Prompt Review — ${label}`;
+            ? `Hosho Bot — ${label} — PR #${prNumber}`
+            : `Hosho Bot — ${label}`;
         await octokit.request('PATCH /repos/{owner}/{repo}/actions/runs/{run_id}', {
             owner, repo, run_id: runId, name,
         });
@@ -567,8 +567,8 @@ async function postReviewVerdict(octokit, owner, repo, pullNumber, commitSha, ha
         const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber });
         const event = hasCriticalIssues ? 'REQUEST_CHANGES' : 'COMMENT';
         const body = hasCriticalIssues
-            ? 'Prompt Review found critical issues. See the review comment above for details.'
-            : 'Prompt Review complete. See the review comment above for details.';
+            ? 'Hosho Bot found critical issues. See the review comment above for details.'
+            : 'Hosho Bot review complete. See the review comment above for details.';
         await octokit.rest.pulls.createReview({
             owner, repo, pull_number: pullNumber,
             commit_id: pr.head.sha,
@@ -787,7 +787,7 @@ function formatPRComment(comparisons) {
     const fileCount = comparisons.length;
     const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
     let md = `${BOT_MARKER}\n`;
-    md += `# PROMPT REVIEW\n\n`;
+    md += `# Hosho Bot — Prompt Review\n\n`;
     md += `Reviewed ${fileCount} prompt file(s) against ${factorCount} factors.\n\n`;
     md += `---\n\n`;
     for (const comp of comparisons) {
@@ -799,6 +799,7 @@ function formatPRComment(comparisons) {
         md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
         md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
     }
+    md += `\n*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
     return md;
 }
 function formatFileSection(comp) {
@@ -952,7 +953,7 @@ function formatFactorFindings(factor, promptFile) {
 function formatJobSummary(comparisons) {
     const fileCount = comparisons.length;
     const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
-    let md = `# PROMPT REVIEW\n\n`;
+    let md = `# Hosho Bot — Prompt Review\n\n`;
     md += `Reviewed ${fileCount} prompt file(s) against ${factorCount} factors.\n`;
     md += `Mode: Pull Request\n\n`;
     md += `---\n\n`;
@@ -965,7 +966,7 @@ function formatJobSummary(comparisons) {
 // ---- On-Demand Summary ----
 function formatOnDemandSummary(synthesis, factorResults) {
     const factorCount = factorResults.length;
-    let md = `# PROMPT REVIEW\n\n`;
+    let md = `# Hosho Bot — Prompt Review\n\n`;
     md += `Reviewed 1 prompt file against ${factorCount} factors.\n`;
     md += `Mode: On-Demand\n\n`;
     md += `---\n\n`;

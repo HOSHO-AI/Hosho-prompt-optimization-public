@@ -1,5 +1,5 @@
-name: Prompt Review
-run-name: "Prompt Review — PR #${{ github.event.pull_request.number }}"
+name: Hosho Bot — Prompt Review (PR)
+run-name: "Hosho Bot — PR #${{ github.event.pull_request.number }}"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Choose ONE trigger pattern below — match it to the action input you use.

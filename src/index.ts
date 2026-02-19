@@ -260,8 +260,8 @@ async function updateWorkflowRunName(
     }
 
     const name = prNumber
-      ? `Prompt Review — ${label} — PR #${prNumber}`
-      : `Prompt Review — ${label}`;
+      ? `Hosho Bot — ${label} — PR #${prNumber}`
+      : `Hosho Bot — ${label}`;
 
     await octokit.request('PATCH /repos/{owner}/{repo}/actions/runs/{run_id}', {
       owner, repo, run_id: runId, name,
@@ -311,8 +311,8 @@ async function postReviewVerdict(
 
     const event = hasCriticalIssues ? 'REQUEST_CHANGES' : 'COMMENT';
     const body = hasCriticalIssues
-      ? 'Prompt Review found critical issues. See the review comment above for details.'
-      : 'Prompt Review complete. See the review comment above for details.';
+      ? 'Hosho Bot found critical issues. See the review comment above for details.'
+      : 'Hosho Bot review complete. See the review comment above for details.';
 
     await octokit.rest.pulls.createReview({
       owner, repo, pull_number: pullNumber,
