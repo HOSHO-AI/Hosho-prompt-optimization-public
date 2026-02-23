@@ -40,9 +40,9 @@ In your GitHub repo, go to **Settings > Secrets and variables > Actions > New re
 Create the file `.github/workflows/hosho-prompt-review.yml` in your repo (create the `.github/workflows/` directory if it doesn't exist yet) and paste the following:
 
 ```yaml
-name: Prompt Review
+name: Hosho Prompt Review
 run-name: >-
-  Prompt Review —
+  Hosho Prompt Review —
   ${{ github.event_name == 'pull_request'
       && format('PR #{0}', github.event.pull_request.number)
       || inputs.prompt_file }}
@@ -132,13 +132,13 @@ User → Requirements Gatherer → Planner → Builder → Reviewer → User
 
 ### 5. Using on-demand mode
 
-On-demand mode is already included in the workflow above via the `workflow_dispatch` trigger. To run it: go to the **Actions** tab in your GitHub repo → select **Prompt Review** → click **Run workflow** → enter the path to your prompt file → click the green **Run workflow** button. Results appear in the Job Summary for that run.
+On-demand mode is already included in the workflow above via the `workflow_dispatch` trigger. To run it: go to the **Actions** tab in your GitHub repo → select **Hosho Prompt Review** → click **Run workflow** → enter the path to your prompt file → click the green **Run workflow** button. Results appear in the Job Summary for that run.
 
 ### Verify it works
 
 **PR mode:** Create a branch, edit a prompt file, and open a pull request. A review comment will appear within 1-2 minutes.
 
-**On-demand mode:** Go to the **Actions** tab → select **Prompt Review** → click **Run workflow** → enter a prompt file path. Results appear in the Job Summary at the bottom of the workflow run page (click the run, then scroll down past the logs).
+**On-demand mode:** Go to the **Actions** tab → select **Hosho Prompt Review** → click **Run workflow** → enter a prompt file path. Results appear in the Job Summary at the bottom of the workflow run page (click the run, then scroll down past the logs).
 
 ---
 
