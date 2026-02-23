@@ -1,4 +1,4 @@
-# Prompt Reviewer
+# Hosho Prompt Reviewer
 
 A GitHub Action that evaluates AI agent prompts against 6 prompt engineering quality factors. It scores each factor, identifies gaps with specific code references, and suggests concrete improvements. In PR mode, it also analyzes what changed between versions and whether the changes improved or regressed quality.
 
