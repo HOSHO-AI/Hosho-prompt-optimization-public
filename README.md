@@ -37,7 +37,7 @@ A GitHub Action that evaluates AI agent prompts against 6 prompt engineering qua
 
 ### 1. Get your API key
 
-Contact Hosho to receive your API key.
+Request an API key at [otto@hoshoai.com](mailto:otto@hoshoai.com).
 
 ### 2. Store it as a secret in your repo
 
@@ -189,7 +189,7 @@ For newly added files, the action scores the prompt but skips the impact analysi
 
 Triggered via `workflow_dispatch` (manual run) or any non-PR event. Requires the `prompt_file` input. Writes results to the Job Summary in the Actions tab.
 
-See [`examples/on-demand.yml`](examples/on-demand.yml) for a complete workflow.
+The workflow in step 3 above already includes on-demand support via the `workflow_dispatch` trigger. See [`examples/on-demand.yml`](examples/on-demand.yml) for a standalone alternative.
 
 ---
 
@@ -218,6 +218,10 @@ When the action runs, it sends the following to the Hosho API:
 - Every request is authenticated with your **API key**.
 - No prompt content is logged — server logs contain only transaction metadata (e.g., "Evaluating: prompts/agent.md"), not file contents or assessment details.
 
+### Licensing
+
+This GitHub Action client is open source under the [MIT License](LICENSE). The Hosho API service that performs the evaluations is proprietary to Hosho Private Limited and is not covered by this license.
+
 ---
 
 ## Troubleshooting
@@ -230,3 +234,9 @@ When the action runs, it sends the following to the Hosho API:
 | "Resource not accessible by integration" (403) | Add `permissions: pull-requests: write` and `issues: write` to the workflow |
 | No PR comment appears but action succeeds | Check that `GITHUB_TOKEN` has write permissions and the workflow has the permissions block |
 | Action times out | Default timeout is 180s (3 minutes). Evaluations take 60-90 seconds per file. For many files, increase with `timeout: 300` |
+
+---
+
+## Disclaimer
+
+This tool is provided as-is for informational purposes. It does not constitute professional advice. Use at your own risk. The authors are not liable for any damages or losses arising from its use.
