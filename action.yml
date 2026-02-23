@@ -19,7 +19,7 @@ inputs:
     required: false
     default: ''
   file_pattern:
-    description: 'Glob pattern for identifying prompt files in PRs (e.g. "**/*system-prompt*.md")'
+    description: 'Glob pattern(s) for identifying prompt files in PRs. Supports comma-separated patterns (e.g. "**/*system-prompt*.md" or "**/*system-prompt*.md, **/*user-prompt*.md")'
     required: false
     default: ''
   prompt_path:

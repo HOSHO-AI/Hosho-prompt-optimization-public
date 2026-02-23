@@ -275,7 +275,8 @@ async function identifyChangedPromptFiles(octokit, owner, repo, pullNumber, opti
 }
 function buildMatcher(options) {
     if (options.filePattern) {
-        return (filename) => (0, minimatch_1.minimatch)(filename, options.filePattern);
+        const patterns = options.filePattern.split(',').map(p => p.trim()).filter(Boolean);
+        return (filename) => patterns.some(pattern => (0, minimatch_1.minimatch)(filename, pattern));
     }
     const normalizedPath = options.promptPath.endsWith('/')
         ? options.promptPath

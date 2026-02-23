@@ -61,7 +61,8 @@ export async function identifyChangedPromptFiles(
 
 function buildMatcher(options: FileFilterOptions): (filename: string) => boolean {
   if (options.filePattern) {
-    return (filename: string) => minimatch(filename, options.filePattern!);
+    const patterns = options.filePattern.split(',').map(p => p.trim()).filter(Boolean);
+    return (filename: string) => patterns.some(pattern => minimatch(filename, pattern));
   }
   const normalizedPath = options.promptPath!.endsWith('/')
     ? options.promptPath!

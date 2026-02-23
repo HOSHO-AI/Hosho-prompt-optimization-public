@@ -49,16 +49,25 @@ In your GitHub repo, go to **Settings > Secrets and variables > Actions > New re
 
 ### 3. Create a workflow file
 
-Create the file `.github/workflows/prompt-review.yml` in your repo (create the `.github/workflows/` directory if it doesn't exist yet) and paste the following:
+Create the file `.github/workflows/hosho-prompt-review.yml` in your repo (create the `.github/workflows/` directory if it doesn't exist yet) and paste the following:
 
 ```yaml
 name: Prompt Review
-run-name: "Prompt Review — PR #${{ github.event.pull_request.number }}"
+run-name: >-
+  Prompt Review —
+  ${{ github.event_name == 'pull_request'
+      && format('PR #{0}', github.event.pull_request.number)
+      || inputs.prompt_file }}
 
 on:
   pull_request:
     paths:
-      - 'prompts/**'   # Adjust to match where your prompt files live
+      - '**/*system-prompt*.md'   # Adjust to match your prompt file naming pattern
+  workflow_dispatch:
+    inputs:
+      prompt_file:
+        description: "Path to prompt file to review"
+        required: true
 
 permissions:
   contents: read
@@ -79,15 +88,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # Provided automatically by GitHub — do not create this secret
         with:
           api_key: ${{ secrets.HOSHO_API_KEY }}
-          prompt_path: prompts/   # Same directory you listed under paths: above
+          # Supports comma-separated patterns to match multiple naming conventions:
+          #   file_pattern: '**/*system-prompt*.md, **/*user-prompt*.md'
+          file_pattern: '**/*system-prompt*.md'
+          prompt_file: ${{ github.event.inputs.prompt_file || '' }}
           # system_overview: docs/system-overview.md   # Optional — see step 4
 ```
 
-That's it. Every PR that changes files in `prompts/` will now get an automated review comment. The `run-name` field customizes the initial name in the Actions tab run list. With the `actions: write` permission, the action updates the run name to show the actual prompt filenames (e.g., "Prompt Review — agent.md, planner.md — PR #23").
+That's it — one file handles both PR reviews and on-demand reviews. Every PR that changes matching files gets an automated review comment. You can also run it manually from the Actions tab to evaluate any prompt file on demand.
 
-A copy of this workflow is also available at [`examples/pr-review.yml`](examples/pr-review.yml).
+The `file_pattern` input supports comma-separated glob patterns (e.g., `**/*system-prompt*.md, **/*user-prompt*.md`) to match multiple naming conventions. Make sure the `paths:` trigger at the top of the workflow matches the same patterns so the workflow triggers correctly.
 
-> **Note:** Make sure `prompt_path` points to the same directory as the `paths:` trigger at the top of the workflow, so the action reviews the same files that triggered it. The action reviews every file under this directory — there's no file extension filter, so any text file (`.md`, `.txt`, `.yaml`, etc.) will be evaluated.
+> **Note:** The `file_pattern` input uses glob matching (powered by [minimatch](https://github.com/isaacs/minimatch)), so `**/*system-prompt*.md` matches files named `system-prompt.md` or `content-agent-system-prompt.md` in any directory.
 
 ### 4. (Optional) Add a system overview
 
@@ -130,17 +142,15 @@ Example format:
 User → Requirements Gatherer → Planner → Builder → Reviewer → User
 ```
 
-### 5. (Optional) Set up on-demand mode
+### 5. Using on-demand mode
 
-To evaluate a prompt without opening a PR, add a second workflow — see [`examples/on-demand.yml`](examples/on-demand.yml) for the complete file.
-
-To run it: go to the **Actions** tab in your GitHub repo → select **Prompt Review (On-Demand)** → click **Run workflow** → enter the path to your prompt file → click the green **Run workflow** button. Results appear in the Job Summary for that run.
+On-demand mode is already included in the workflow above via the `workflow_dispatch` trigger. To run it: go to the **Actions** tab in your GitHub repo → select **Prompt Review** → click **Run workflow** → enter the path to your prompt file → click the green **Run workflow** button. Results appear in the Job Summary for that run.
 
 ### Verify it works
 
-**PR mode:** Create a branch, add or edit a file in your `prompts/` directory, and open a pull request. A review comment will appear within 1-2 minutes.
+**PR mode:** Create a branch, edit a prompt file, and open a pull request. A review comment will appear within 1-2 minutes.
 
-**On-demand mode:** Go to the **Actions** tab → select the on-demand workflow → click **Run workflow** → enter a prompt file path. Results appear in the Job Summary at the bottom of the workflow run page (click the run, then scroll down past the logs).
+**On-demand mode:** Go to the **Actions** tab → select **Prompt Review** → click **Run workflow** → enter a prompt file path. Results appear in the Job Summary at the bottom of the workflow run page (click the run, then scroll down past the logs).
 
 ---
 
@@ -150,7 +160,8 @@ To run it: go to the **Actions** tab in your GitHub repo → select **Prompt Rev
 |-------|----------|---------|-------------|
 | `api_key` | Yes | — | Hosho API key |
 | `prompt_file` | No | `''` | Path to a specific prompt file (on-demand mode) |
-| `prompt_path` | No | `prompts/` | Directory prefix for identifying prompt files in PRs |
+| `file_pattern` | No | `''` | Glob pattern(s) for identifying prompt files in PRs. Supports comma-separated patterns (e.g. `**/*system-prompt*.md, **/*user-prompt*.md`) |
+| `prompt_path` | No | `''` | Directory prefix for identifying prompt files in PRs (e.g. `prompts/`). Alternative to `file_pattern` |
 | `system_overview` | No | `''` | Path to a system overview markdown file |
 | `api_url` | No | Built-in | API endpoint URL — override for enterprise/self-hosted deployments |
 | `timeout` | No | `180` | API call timeout in seconds |
