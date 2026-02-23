@@ -51,6 +51,8 @@ on:
   pull_request:
     paths:
       - '**/*system-prompt*.md'   # Adjust to match your prompt file naming pattern
+      # To match multiple patterns, add more lines:
+      # - '**/*user-prompt*.md'
   workflow_dispatch:
     inputs:
       prompt_file:
