@@ -1,35 +1,23 @@
 # Hosho Prompt Reviewer
 
-A GitHub Action that evaluates AI agent prompts against 6 prompt engineering quality factors. It scores each factor, identifies gaps with specific code references, and suggests concrete improvements. In PR mode, it also analyzes what changed between versions and whether the changes improved or regressed quality.
+Evaluates your AI agent prompts against research-backed prompt engineering best practices — pinpoints what's weak and gives you concrete fixes with before/after snippets you can apply immediately.
 
-## What You Get
+## How It Works
 
-**PR mode** posts a review comment on your pull request containing:
-- Per-factor score table with traffic-light indicators
-- Impact column showing whether each factor improved, regressed, or stayed the same
-- Collapsible findings with code snippets from your prompt and proposed fixes
-- Review verdict (APPROVE, or REQUEST_CHANGES if any factor scores Critical or any factor regressed)
+Your prompts are evaluated across 6 quality factors drawn from prompt engineering research and model-provider guidelines (Claude, GPT, Gemini). Each factor is rated green, yellow, or red so you can see at a glance where to focus:
 
-**On-demand mode** writes a Job Summary (visible in the Actions tab) with the full evaluation.
-
-### Scoring Scale
-
-| Score | Label | Meaning |
-|-------|-------|---------|
-| 8-10 | Good | Meets quality criteria |
-| 5-7 | Needs Work | Gaps identified with recommendations |
-| 1-4 | Critical | Significant issues that need attention |
-
-### Quality Factors
-
-| Factor | What It Measures |
-|--------|-----------------|
+| Factor | What It Checks |
+|--------|---------------|
 | Scope | Single clear goal, tightly coupled tasks |
 | Structure & Flow | Logical sections, information density, delimiters |
 | Context & Guidance | Goals, inputs, examples, chain-of-thought |
-| Constraints | Compatibility, priority, positive framing |
+| Constraints | Boundaries, priority handling, positive framing |
 | Output Validation | Format spec, validation steps, substance checks |
-| Model-Specific Prompting | Claude, GPT, and Gemini best practices |
+| Model-Specific Prompting | Alignment with Claude, GPT, and Gemini best practices |
+
+For every factor that isn't green, you get specific findings — what's missing, a snippet from your prompt, and a proposed fix you can drop in.
+
+**PR mode** posts a review comment directly on your pull request with the full evaluation, including whether each factor improved or regressed compared to the previous version. **On-demand mode** writes the results to the Job Summary in the Actions tab.
 
 ---
 
@@ -99,7 +87,7 @@ That's it — one file handles both PR reviews and on-demand reviews. Every PR t
 
 The `file_pattern` input supports comma-separated glob patterns (e.g., `**/*system-prompt*.md, **/*user-prompt*.md`) to match multiple naming conventions. Make sure the `paths:` trigger at the top of the workflow matches the same patterns so the workflow triggers correctly.
 
-> **Note:** The `file_pattern` input uses glob matching (powered by [minimatch](https://github.com/isaacs/minimatch)), so `**/*system-prompt*.md` matches files named `system-prompt.md` or `content-agent-system-prompt.md` in any directory.
+> **Note:** The `file_pattern` input uses glob matching (powered by [minimatch](https://github.com/isaacs/minimatch)), so `**/*system-prompt*.md` matches files named `system-prompt.md` or `my-agent-system-prompt.md` in any directory.
 
 ### 4. (Optional) Add a system overview
 
