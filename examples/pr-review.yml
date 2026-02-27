@@ -13,6 +13,7 @@ run-name: "Hosho Bot — PR #${{ github.event.pull_request.number }}"
 
 on:
   pull_request:
+    types: [opened, ready_for_review]   # Runs once when PR is created or marked ready — not on every push
     paths:
       - '**/*system-prompt*.md'   # Option A: any file with "system-prompt" in the name
       # - 'prompts/**'            # Option B: any file in the prompts/ directory
@@ -26,6 +27,7 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false   # Skip draft PRs
     steps:
       - uses: actions/checkout@v4
         with:
