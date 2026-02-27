@@ -809,7 +809,7 @@ function formatFileSection(comp) {
     md += formatEvaluationTable(comp.factorResults, enrichedInsights);
     // Add PR verdict right after table (PR mode only)
     md += formatPRVerdict(enrichedInsights);
-    md += formatRecommendations(enrichedInsights, comp.promptFile);
+    md += formatRecommendations(enrichedInsights);
     return md;
 }
 function formatPromptHeader(promptFile, description) {
@@ -853,7 +853,7 @@ function formatEvaluationTable(factorResults, factorInsights) {
     }
     return md + `\n\n---\n\n`;
 }
-function formatRecommendations(factorInsights, promptFile) {
+function formatRecommendations(factorInsights) {
     const critical = factorInsights.filter(f => f.score <= 4); // 1-4: Critical (red)
     const opportunities = factorInsights.filter(f => f.score >= 5 && f.score <= 7); // 5-7: Needs Work (yellow)
     if (critical.length === 0 && opportunities.length === 0) {
@@ -863,18 +863,18 @@ function formatRecommendations(factorInsights, promptFile) {
     if (critical.length > 0) {
         md += `#### 🔴 Major Gaps\n\n`;
         for (const factor of critical) {
-            md += formatFactorFindings(factor, promptFile);
+            md += formatFactorFindings(factor);
         }
     }
     if (opportunities.length > 0) {
         md += `#### 🟡 Opportunities to Improve\n\n`;
         for (const factor of opportunities) {
-            md += formatFactorFindings(factor, promptFile);
+            md += formatFactorFindings(factor);
         }
     }
     return md;
 }
-function formatFactorFindings(factor, promptFile) {
+function formatFactorFindings(factor) {
     if (factor.findings.length === 0 && !factor.changeDetails) {
         return ''; // No findings and no PR changes
     }
@@ -918,16 +918,12 @@ function formatFactorFindings(factor, promptFile) {
         for (const finding of factor.findings) {
             // Determine title: use short issue if available, else use description
             const title = finding.codeSnippet?.issue || finding.description;
-            // Title is now short (3-5 words from codeSnippet.issue)
-            md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
-            // Code snippet (if present and not empty)
+            // Title with line reference in brackets when code snippet is available
             if (finding.codeSnippet && finding.codeSnippet.code.trim()) {
                 const lineRef = finding.codeSnippet.startLine === finding.codeSnippet.endLine
                     ? `${finding.codeSnippet.startLine}`
                     : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
-                // Include full description + "Prompt text example from"
-                const desc = sanitizeInlineText(finding.description).replace(/\.+$/, '');
-                md += `${desc}. Prompt text example from \`${promptFile}:${lineRef}\`\n\n`;
+                md += `<h4>${finding.findingNumber}. ${title} (line ${lineRef})</h4>\n\n`;
                 // Clean section headers from code
                 const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
                 // Render code block if non-empty (dynamic fence to avoid nested ``` conflicts)
@@ -935,6 +931,9 @@ function formatFactorFindings(factor, promptFile) {
                     const codeFence = getCodeFence(cleanedCode);
                     md += `${codeFence}\n${cleanedCode}\n${codeFence}\n\n`;
                 }
+            }
+            else {
+                md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
             }
             // Recommendation
             md += `**Potential prompt edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
@@ -973,7 +972,7 @@ function formatOnDemandSummary(synthesis, factorResults) {
     const enrichedInsights = mergeFindings(synthesis.factorInsights, factorResults);
     md += formatPromptHeader(synthesis.promptFile, synthesis.promptDescription);
     md += formatEvaluationTable(factorResults, enrichedInsights);
-    md += formatRecommendations(enrichedInsights, synthesis.promptFile);
+    md += formatRecommendations(enrichedInsights);
     md += `\n---\n\n`;
     return md;
 }
