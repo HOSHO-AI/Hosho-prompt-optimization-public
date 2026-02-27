@@ -826,8 +826,8 @@ function formatEvaluationTable(factorResults, factorInsights) {
     // Check if any factor has change direction (PR mode indicator)
     const isPRMode = factorInsights.some(f => f.changeDirection);
     if (isPRMode) {
-        md += `| Factor | Factor Assessment | Impact of PR | Rationale |\n`;
-        md += `|--------|:-----------------:|:------------:|-----------|`;
+        md += `| Factor | Impact of PR | Factor Assessment | Rationale |\n`;
+        md += `|--------|:------------:|:-----------------:|-----------|`;
     }
     else {
         md += `| Factor | Factor Assessment | Rationale |\n`;
@@ -839,13 +839,13 @@ function formatEvaluationTable(factorResults, factorInsights) {
         let rationale = factor.tableRationale;
         // In PR mode, show factor assessment and PR impact as labeled lines
         if (isPRMode && insight?.changeRationale) {
-            rationale = `**Factor assessment:** ${factor.tableRationale}<br>**Impact of PR:** ${insight.changeRationale}`;
+            rationale = `**Impact of PR:** ${insight.changeRationale}<br>**Factor assessment:** ${factor.tableRationale}`;
         }
         // Escape pipe characters to prevent breaking table columns
         const safeRationale = rationale.replace(/\|/g, '\\|');
         if (isPRMode && insight?.changeDirection) {
             const changeEmoji = getChangeEmoji(insight.changeDirection);
-            md += `\n| **${factor.factorName}** | ${emoji} | ${changeEmoji} | ${safeRationale} |`;
+            md += `\n| **${factor.factorName}** | ${changeEmoji} | ${emoji} | ${safeRationale} |`;
         }
         else {
             md += `\n| **${factor.factorName}** | ${emoji} | ${safeRationale} |`;
@@ -927,7 +927,7 @@ function formatFactorFindings(factor, promptFile) {
                     : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
                 // Include full description + "Prompt text example from"
                 const desc = sanitizeInlineText(finding.description).replace(/\.+$/, '');
-                md += `**Assessment observation:** ${desc}. Prompt text example from \`${promptFile}:${lineRef}\`\n\n`;
+                md += `${desc}. Prompt text example from \`${promptFile}:${lineRef}\`\n\n`;
                 // Clean section headers from code
                 const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
                 // Render code block if non-empty (dynamic fence to avoid nested ``` conflicts)
@@ -937,10 +937,9 @@ function formatFactorFindings(factor, promptFile) {
                 }
             }
             // Recommendation
-            md += `**Consideration:** ${sanitizeInlineText(finding.consideration)}\n\n`;
-            // Proposed prompt edit (if present and not empty)
+            md += `**Potential prompt edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
+            // Rewritten code (if present and not empty)
             if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
-                md += `**Proposed prompt edit:**\n\n`;
                 const rewriteFence = getCodeFence(finding.rewrittenCode);
                 md += `${rewriteFence}\n${finding.rewrittenCode}\n${rewriteFence}\n\n`;
             }

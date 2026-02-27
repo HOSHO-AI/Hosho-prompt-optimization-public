@@ -279,8 +279,8 @@ function formatEvaluationTable(
   const isPRMode = factorInsights.some(f => f.changeDirection);
 
   if (isPRMode) {
-    md += `| Factor | Factor Assessment | Impact of PR | Rationale |\n`;
-    md += `|--------|:-----------------:|:------------:|-----------|`;
+    md += `| Factor | Impact of PR | Factor Assessment | Rationale |\n`;
+    md += `|--------|:------------:|:-----------------:|-----------|`;
   } else {
     md += `| Factor | Factor Assessment | Rationale |\n`;
     md += `|--------|:-----------------:|-----------|`;
@@ -294,7 +294,7 @@ function formatEvaluationTable(
 
     // In PR mode, show factor assessment and PR impact as labeled lines
     if (isPRMode && insight?.changeRationale) {
-      rationale = `**Factor assessment:** ${factor.tableRationale}<br>**Impact of PR:** ${insight.changeRationale}`;
+      rationale = `**Impact of PR:** ${insight.changeRationale}<br>**Factor assessment:** ${factor.tableRationale}`;
     }
 
     // Escape pipe characters to prevent breaking table columns
@@ -302,7 +302,7 @@ function formatEvaluationTable(
 
     if (isPRMode && insight?.changeDirection) {
       const changeEmoji = getChangeEmoji(insight.changeDirection);
-      md += `\n| **${factor.factorName}** | ${emoji} | ${changeEmoji} | ${safeRationale} |`;
+      md += `\n| **${factor.factorName}** | ${changeEmoji} | ${emoji} | ${safeRationale} |`;
     } else {
       md += `\n| **${factor.factorName}** | ${emoji} | ${safeRationale} |`;
     }
@@ -406,7 +406,7 @@ function formatFactorFindings(
 
         // Include full description + "Prompt text example from"
         const desc = sanitizeInlineText(finding.description).replace(/\.+$/, '');
-        md += `**Assessment observation:** ${desc}. Prompt text example from \`${promptFile}:${lineRef}\`\n\n`;
+        md += `${desc}. Prompt text example from \`${promptFile}:${lineRef}\`\n\n`;
 
         // Clean section headers from code
         const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
@@ -419,11 +419,10 @@ function formatFactorFindings(
       }
 
       // Recommendation
-      md += `**Consideration:** ${sanitizeInlineText(finding.consideration)}\n\n`;
+      md += `**Potential prompt edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
 
-      // Proposed prompt edit (if present and not empty)
+      // Rewritten code (if present and not empty)
       if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
-        md += `**Proposed prompt edit:**\n\n`;
         const rewriteFence = getCodeFence(finding.rewrittenCode);
         md += `${rewriteFence}\n${finding.rewrittenCode}\n${rewriteFence}\n\n`;
       }
