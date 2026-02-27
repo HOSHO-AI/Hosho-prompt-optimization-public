@@ -37,7 +37,7 @@ export interface ReviewAPIResponse {
 export async function callReviewAPI(
   apiUrl: string,
   request: ReviewAPIRequest,
-  timeoutMs: number = 180_000
+  timeoutMs: number = 600_000
 ): Promise<ReviewAPIResponse> {
   let lastError: Error | null = null;
 

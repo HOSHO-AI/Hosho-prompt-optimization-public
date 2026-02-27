@@ -33,7 +33,7 @@ inputs:
   timeout:
     description: 'API call timeout in seconds'
     required: false
-    default: '180'
+    default: '600'
 
 outputs:
   overall_score:
