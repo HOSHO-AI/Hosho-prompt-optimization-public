@@ -220,8 +220,13 @@ function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
 function formatWhatChanged(changeSummary?: ChangeItem[]): string {
   if (!changeSummary || changeSummary.length === 0) return '';
 
+  const effectOrder: Record<string, number> = { negative: 0, mixed: 1, positive: 2 };
+  const sorted = [...changeSummary].sort(
+    (a, b) => (effectOrder[a.effect] ?? 1) - (effectOrder[b.effect] ?? 1)
+  );
+
   let md = '### What changed in this PR\n\n';
-  for (const item of changeSummary) {
+  for (const item of sorted) {
     const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
     const change = sanitizeInlineText(item.change);
     const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
@@ -275,20 +280,14 @@ function formatFindingDetail(finding: Finding): string {
   return md;
 }
 
-function formatCollapsedFindings(
+function formatAllFindings(
   insights: FactorInsight[],
-  summaryLabel: string,
   tableContent?: string,
 ): string {
-  // Gather insights that have findings
   const withFindings = insights.filter(f => f.findings.length > 0);
   if (withFindings.length === 0 && !tableContent) return '';
 
-  const totalFindings = withFindings.reduce((sum, f) => sum + f.findings.length, 0);
-  const factorCount = withFindings.length;
-
-  let md = `<details><summary>${summaryLabel} (${totalFindings} across ${factorCount} factor${factorCount === 1 ? '' : 's'})</summary>\n\n`;
-  md += `<br>\n\n`;
+  let md = `### All findings\n\n`;
 
   if (tableContent) {
     md += tableContent;
@@ -304,7 +303,6 @@ function formatCollapsedFindings(
     }
   }
 
-  md += `</details>\n\n`;
   return md;
 }
 
@@ -329,7 +327,7 @@ export function formatOnDemandSummary(
   }
 
   // Collapsed detail
-  md += formatCollapsedFindings(enrichedInsights, 'All findings');
+  md += formatAllFindings(enrichedInsights);
 
   return md;
 }
@@ -379,7 +377,7 @@ function formatPRFileSection(
 
   // Collapsed detail (table + ALL findings)
   const tableContent = formatTable(comp.factorResults, enrichedInsights);
-  md += formatCollapsedFindings(enrichedInsights, 'All findings', tableContent);
+  md += formatAllFindings(enrichedInsights, tableContent);
 
   return md;
 }

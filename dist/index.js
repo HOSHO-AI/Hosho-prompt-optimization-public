@@ -795,8 +795,10 @@ function formatTopEdits(tagged, limit = 3) {
 function formatWhatChanged(changeSummary) {
     if (!changeSummary || changeSummary.length === 0)
         return '';
+    const effectOrder = { negative: 0, mixed: 1, positive: 2 };
+    const sorted = [...changeSummary].sort((a, b) => (effectOrder[a.effect] ?? 1) - (effectOrder[b.effect] ?? 1));
     let md = '### What changed in this PR\n\n';
-    for (const item of changeSummary) {
+    for (const item of sorted) {
         const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
         const change = sanitizeInlineText(item.change);
         const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
@@ -843,15 +845,11 @@ function formatFindingDetail(finding) {
     md += `---\n\n`;
     return md;
 }
-function formatCollapsedFindings(insights, summaryLabel, tableContent) {
-    // Gather insights that have findings
+function formatAllFindings(insights, tableContent) {
     const withFindings = insights.filter(f => f.findings.length > 0);
     if (withFindings.length === 0 && !tableContent)
         return '';
-    const totalFindings = withFindings.reduce((sum, f) => sum + f.findings.length, 0);
-    const factorCount = withFindings.length;
-    let md = `<details><summary>${summaryLabel} (${totalFindings} across ${factorCount} factor${factorCount === 1 ? '' : 's'})</summary>\n\n`;
-    md += `<br>\n\n`;
+    let md = `### All findings\n\n`;
     if (tableContent) {
         md += tableContent;
     }
@@ -864,7 +862,6 @@ function formatCollapsedFindings(insights, summaryLabel, tableContent) {
             md += formatFindingDetail(finding);
         }
     }
-    md += `</details>\n\n`;
     return md;
 }
 // ---- On-demand output ----
@@ -879,7 +876,7 @@ function formatOnDemandSummary(synthesis, factorResults, targetModelFamily, targ
         md += formatTopEdits(allFindings, 3);
     }
     // Collapsed detail
-    md += formatCollapsedFindings(enrichedInsights, 'All findings');
+    md += formatAllFindings(enrichedInsights);
     return md;
 }
 // ---- PR output ----
@@ -909,7 +906,7 @@ function formatPRFileSection(comp, prNumber) {
     }
     // Collapsed detail (table + ALL findings)
     const tableContent = formatTable(comp.factorResults, enrichedInsights);
-    md += formatCollapsedFindings(enrichedInsights, 'All findings', tableContent);
+    md += formatAllFindings(enrichedInsights, tableContent);
     return md;
 }
 function formatPRComment(comparisons, prNumber) {
