@@ -832,7 +832,8 @@ function formatCollapsedFindings(insights, summaryLabel) {
     let md = `<details><summary>${summaryLabel} (${totalFindings} across ${factorCount} factor${factorCount === 1 ? '' : 's'})</summary>\n\n`;
     md += `<br>\n\n`;
     for (const insight of withFindings) {
-        md += `#### ${insight.factorName}\n\n`;
+        md += `---\n\n`;
+        md += `#### FACTOR: ${insight.factorName.toUpperCase()}\n\n`;
         for (const finding of insight.findings) {
             md += formatFindingDetail(finding);
         }

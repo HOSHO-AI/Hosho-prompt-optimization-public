@@ -272,7 +272,8 @@ function formatCollapsedFindings(
   md += `<br>\n\n`;
 
   for (const insight of withFindings) {
-    md += `#### ${insight.factorName}\n\n`;
+    md += `---\n\n`;
+    md += `#### FACTOR: ${insight.factorName.toUpperCase()}\n\n`;
     for (const finding of insight.findings) {
       md += formatFindingDetail(finding);
     }
