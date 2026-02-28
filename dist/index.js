@@ -454,6 +454,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         ...r.comparison,
         targetModelFamily: r.targetModelFamily,
         targetModelName: r.targetModelName,
+        changeSummary: r.changeSummary,
     }));
     // Normalize after JSON round-trip (undefined fields get stripped by JSON.stringify)
     for (const comp of comparisons) {
@@ -623,15 +624,6 @@ function getChangeEmoji(direction) {
         return '🔄 Mixed';
     return '➖';
 }
-function getChangeBulletEmoji(direction) {
-    if (direction === 'improved')
-        return '✅';
-    if (direction === 'worse')
-        return '❌';
-    if (direction === 'mixed')
-        return '⚠️';
-    return '';
-}
 function cleanCodeSnippet(code) {
     const lines = code.split('\n');
     const cleaned = [];
@@ -792,39 +784,17 @@ function formatTopEdits(tagged, limit = 3) {
     }
     return md;
 }
-function formatWhatChanged(insights) {
-    const attention = [];
-    const improved = [];
-    for (const insight of insights) {
-        if (!insight.changeDirection || insight.changeDirection === 'no-change')
-            continue;
-        if (!insight.changeDetails || insight.changeDetails.length === 0)
-            continue;
-        const emoji = getChangeBulletEmoji(insight.changeDirection);
-        const isAttention = insight.changeDirection === 'worse' || insight.changeDirection === 'mixed';
-        for (const detail of insight.changeDetails) {
-            const bullet = `- ${emoji} ${sanitizeInlineText(detail)}`;
-            if (isAttention) {
-                attention.push(bullet);
-            }
-            else {
-                improved.push(bullet);
-            }
-        }
-    }
-    if (attention.length === 0 && improved.length === 0)
+function formatWhatChanged(changeSummary) {
+    if (!changeSummary || changeSummary.length === 0)
         return '';
-    let md = `### What changed\n\n`;
-    if (attention.length > 0) {
-        if (improved.length > 0)
-            md += `**Needs attention:**\n`;
-        md += attention.join('\n') + '\n\n';
+    let md = '### What changed\n\n';
+    for (const item of changeSummary) {
+        const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
+        const change = sanitizeInlineText(item.change);
+        const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
+        md += `- ${emoji} ${change}${impact}\n`;
     }
-    if (improved.length > 0) {
-        if (attention.length > 0)
-            md += `**Improved:**\n`;
-        md += improved.join('\n') + '\n\n';
-    }
+    md += '\n';
     return md;
 }
 function formatFindingDetail(finding) {
@@ -894,7 +864,7 @@ function formatPRFileSection(comp, prNumber) {
     // Table
     md += formatTable(comp.factorResults, enrichedInsights);
     // What changed
-    md += formatWhatChanged(enrichedInsights);
+    md += formatWhatChanged(comp.changeSummary);
     // Split findings: PR-caused vs pre-existing
     const prCausedInsights = enrichedInsights.filter(f => f.changeDirection === 'worse' || f.changeDirection === 'mixed');
     const otherInsights = enrichedInsights.filter(f => f.changeDirection !== 'worse' && f.changeDirection !== 'mixed');
@@ -907,11 +877,7 @@ function formatPRFileSection(comp, prNumber) {
     // Further improvements (non-PR findings, collapsed)
     const otherWithFindings = otherInsights.filter(f => f.findings.length > 0);
     if (otherWithFindings.length > 0) {
-        const totalOther = otherWithFindings.reduce((sum, f) => sum + f.findings.length, 0);
-        const factorCount = otherWithFindings.length;
         md += `### Further improvements — not blocking this PR\n\n`;
-        md += `> ${totalOther} additional finding${totalOther === 1 ? '' : 's'} across ${factorCount} factor${factorCount === 1 ? '' : 's'} represent${totalOther === 1 ? 's' : ''}\n`;
-        md += `> opportunities in the broader prompt, independent of this PR's changes.\n\n`;
         md += formatCollapsedFindings(otherInsights, 'Expand further improvements');
     }
     return md;

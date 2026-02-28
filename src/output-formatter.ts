@@ -1,5 +1,6 @@
 import {
   ComparisonResult,
+  ChangeItem,
   SynthesisResult,
   FactorEvaluationResult,
   FactorInsight,
@@ -22,13 +23,6 @@ function getChangeEmoji(direction: 'improved' | 'no-change' | 'worse' | 'mixed')
   if (direction === 'worse') return '⚠️ Worse';
   if (direction === 'mixed') return '🔄 Mixed';
   return '➖';
-}
-
-function getChangeBulletEmoji(direction: 'improved' | 'no-change' | 'worse' | 'mixed'): string {
-  if (direction === 'improved') return '✅';
-  if (direction === 'worse') return '❌';
-  if (direction === 'mixed') return '⚠️';
-  return '';
 }
 
 function cleanCodeSnippet(code: string): string {
@@ -218,41 +212,17 @@ function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
   return md;
 }
 
-function formatWhatChanged(insights: FactorInsight[]): string {
-  const attention: string[] = [];
-  const improved: string[] = [];
+function formatWhatChanged(changeSummary?: ChangeItem[]): string {
+  if (!changeSummary || changeSummary.length === 0) return '';
 
-  for (const insight of insights) {
-    if (!insight.changeDirection || insight.changeDirection === 'no-change') continue;
-    if (!insight.changeDetails || insight.changeDetails.length === 0) continue;
-
-    const emoji = getChangeBulletEmoji(insight.changeDirection);
-    const isAttention = insight.changeDirection === 'worse' || insight.changeDirection === 'mixed';
-
-    for (const detail of insight.changeDetails) {
-      const bullet = `- ${emoji} ${sanitizeInlineText(detail)}`;
-      if (isAttention) {
-        attention.push(bullet);
-      } else {
-        improved.push(bullet);
-      }
-    }
+  let md = '### What changed\n\n';
+  for (const item of changeSummary) {
+    const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
+    const change = sanitizeInlineText(item.change);
+    const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
+    md += `- ${emoji} ${change}${impact}\n`;
   }
-
-  if (attention.length === 0 && improved.length === 0) return '';
-
-  let md = `### What changed\n\n`;
-
-  if (attention.length > 0) {
-    if (improved.length > 0) md += `**Needs attention:**\n`;
-    md += attention.join('\n') + '\n\n';
-  }
-
-  if (improved.length > 0) {
-    if (attention.length > 0) md += `**Improved:**\n`;
-    md += improved.join('\n') + '\n\n';
-  }
-
+  md += '\n';
   return md;
 }
 
@@ -361,7 +331,7 @@ function formatPRFileSection(
   md += formatTable(comp.factorResults, enrichedInsights);
 
   // What changed
-  md += formatWhatChanged(enrichedInsights);
+  md += formatWhatChanged(comp.changeSummary);
 
   // Split findings: PR-caused vs pre-existing
   const prCausedInsights = enrichedInsights.filter(
@@ -381,12 +351,7 @@ function formatPRFileSection(
   // Further improvements (non-PR findings, collapsed)
   const otherWithFindings = otherInsights.filter(f => f.findings.length > 0);
   if (otherWithFindings.length > 0) {
-    const totalOther = otherWithFindings.reduce((sum, f) => sum + f.findings.length, 0);
-    const factorCount = otherWithFindings.length;
-
     md += `### Further improvements — not blocking this PR\n\n`;
-    md += `> ${totalOther} additional finding${totalOther === 1 ? '' : 's'} across ${factorCount} factor${factorCount === 1 ? '' : 's'} represent${totalOther === 1 ? 's' : ''}\n`;
-    md += `> opportunities in the broader prompt, independent of this PR's changes.\n\n`;
     md += formatCollapsedFindings(otherInsights, 'Expand further improvements');
   }
 

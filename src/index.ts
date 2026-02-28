@@ -147,6 +147,7 @@ async function runPRMode(
     ...r.comparison,
     targetModelFamily: r.targetModelFamily,
     targetModelName: r.targetModelName,
+    changeSummary: r.changeSummary,
   }));
 
   // Normalize after JSON round-trip (undefined fields get stripped by JSON.stringify)
