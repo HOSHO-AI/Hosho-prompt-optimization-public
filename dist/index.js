@@ -607,7 +607,7 @@ exports.formatJobSummary = formatJobSummary;
 const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
 exports.BOT_MARKER = BOT_MARKER;
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
-// ---- Helpers (unchanged) ----
+// ---- Helpers ----
 function getTrafficLightEmoji(score) {
     if (score <= 4)
         return '🔴';
@@ -742,12 +742,14 @@ function formatTable(factorResults, insights) {
     md += '\n\n';
     return md;
 }
-function formatVerdict(insights) {
-    const hasRegression = insights.some(f => f.changeDirection === 'worse' || f.changeDirection === 'mixed');
-    if (hasRegression) {
-        return '### Recommendation: ⛔ Reject PR\n\n';
-    }
-    return '### Recommendation: ✅ Approve PR\n\n';
+function formatVerdict(changeSummary) {
+    if (!changeSummary || changeSummary.length === 0)
+        return '### ✅ APPROVE THIS PR\n\n';
+    const hasNegative = changeSummary.some(c => c.effect === 'negative');
+    const hasMixed = changeSummary.some(c => c.effect === 'mixed');
+    if (hasNegative || hasMixed)
+        return '### ⛔ REJECT THIS PR\n\n';
+    return '### ✅ APPROVE THIS PR\n\n';
 }
 function formatEditLine(tagged) {
     const f = tagged.finding;
@@ -758,21 +760,19 @@ function formatEditLine(tagged) {
             ? `§${f.codeSnippet.startLine}`
             : `§${f.codeSnippet.startLine}-${f.codeSnippet.endLine}`;
     }
-    // Build the "why + what to do" from issue + consideration
-    const parts = [];
-    if (f.codeSnippet?.issue) {
-        // Ensure issue ends without period, then add period
-        const issue = f.codeSnippet.issue.replace(/\.+$/, '');
-        parts.push(issue);
+    // Show issue (why) after em-dash. Fall back to consideration if no issue.
+    const reason = f.codeSnippet?.issue || f.consideration || '';
+    const cleanReason = sanitizeInlineText(reason.replace(/\.+$/, ''));
+    if (sectionRef && cleanReason) {
+        return `**${sanitizeInlineText(title)}** (${sectionRef}) — ${cleanReason}`;
     }
-    if (f.consideration) {
-        parts.push(f.consideration.replace(/\.+$/, ''));
+    if (cleanReason) {
+        return `**${sanitizeInlineText(title)}** — ${cleanReason}`;
     }
-    const body = parts.join('. ') + '.';
     if (sectionRef) {
-        return `**${sanitizeInlineText(title)}** (${sectionRef}) — ${sanitizeInlineText(body)}`;
+        return `**${sanitizeInlineText(title)}** (${sectionRef})`;
     }
-    return `**${sanitizeInlineText(title)}** — ${sanitizeInlineText(body)}`;
+    return `**${sanitizeInlineText(title)}**`;
 }
 function formatTopEdits(tagged, limit = 3) {
     if (tagged.length === 0)
@@ -797,6 +797,19 @@ function formatWhatChanged(changeSummary) {
     md += '\n';
     return md;
 }
+function formatRevertSection(changeSummary) {
+    if (!changeSummary)
+        return '';
+    const reverts = changeSummary.filter(c => c.effect === 'negative' && c.revert);
+    if (reverts.length === 0)
+        return '';
+    let md = '### Revert before merging\n\n';
+    for (const item of reverts) {
+        md += `- ${sanitizeInlineText(item.revert)}\n`;
+    }
+    md += '\n';
+    return md;
+}
 function formatFindingDetail(finding) {
     let md = '';
     const title = finding.codeSnippet?.issue || finding.description;
@@ -814,7 +827,7 @@ function formatFindingDetail(finding) {
     else {
         md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
     }
-    md += `**Potential prompt edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
+    md += `**Suggested edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
     if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
         const rewriteFence = getCodeFence(finding.rewrittenCode);
         md += `${rewriteFence}\n${finding.rewrittenCode}\n${rewriteFence}\n\n`;
@@ -822,15 +835,18 @@ function formatFindingDetail(finding) {
     md += `---\n\n`;
     return md;
 }
-function formatCollapsedFindings(insights, summaryLabel) {
+function formatCollapsedFindings(insights, summaryLabel, tableContent) {
     // Gather insights that have findings
     const withFindings = insights.filter(f => f.findings.length > 0);
-    if (withFindings.length === 0)
+    if (withFindings.length === 0 && !tableContent)
         return '';
     const totalFindings = withFindings.reduce((sum, f) => sum + f.findings.length, 0);
     const factorCount = withFindings.length;
     let md = `<details><summary>${summaryLabel} (${totalFindings} across ${factorCount} factor${factorCount === 1 ? '' : 's'})</summary>\n\n`;
     md += `<br>\n\n`;
+    if (tableContent) {
+        md += tableContent;
+    }
     for (const insight of withFindings) {
         md += `---\n\n`;
         md += `#### FACTOR: ${insight.factorName.toUpperCase()}\n\n`;
@@ -849,7 +865,7 @@ function formatOnDemandSummary(synthesis, factorResults, targetModelFamily, targ
     // Top 3 edits
     const allFindings = gatherFindings(enrichedInsights);
     if (allFindings.length > 0) {
-        md += `### Top edits\n\n`;
+        md += `### Top 3 edits\n\n`;
         md += formatTopEdits(allFindings, 3);
     }
     // Collapsed detail
@@ -860,27 +876,21 @@ function formatOnDemandSummary(synthesis, factorResults, targetModelFamily, targ
 function formatPRFileSection(comp, prNumber) {
     const enrichedInsights = mergeFindings(comp.synthesis.factorInsights, comp.factorResults);
     let md = formatHeader(comp.promptFile, comp.synthesis.promptDescription, comp.targetModelFamily, comp.targetModelName, prNumber);
-    // Verdict
-    md += formatVerdict(enrichedInsights);
-    // Table
-    md += formatTable(comp.factorResults, enrichedInsights);
-    // What changed
+    // Verdict (based on changeSummary)
+    md += formatVerdict(comp.changeSummary);
+    // What changed in this PR
     md += formatWhatChanged(comp.changeSummary);
-    // Split findings: PR-caused vs pre-existing
-    const prCausedInsights = enrichedInsights.filter(f => f.changeDirection === 'worse' || f.changeDirection === 'mixed');
-    const otherInsights = enrichedInsights.filter(f => f.changeDirection !== 'worse' && f.changeDirection !== 'mixed');
-    // Fix before merging (PR-caused findings only)
-    const prFindings = gatherFindings(prCausedInsights);
-    if (prFindings.length > 0) {
-        md += `### Priority edits before merging\n\n`;
-        md += formatTopEdits(prFindings, 3);
+    // Revert before merging (conditional — only if ❌ items with revert instructions)
+    md += formatRevertSection(comp.changeSummary);
+    // Top 3 edits to further improve this prompt (ALL findings, whole prompt)
+    const allFindings = gatherFindings(enrichedInsights);
+    if (allFindings.length > 0) {
+        md += `### Top 3 edits to further improve this prompt\n\n`;
+        md += formatTopEdits(allFindings, 3);
     }
-    // Further improvements (non-PR findings, collapsed)
-    const otherWithFindings = otherInsights.filter(f => f.findings.length > 0);
-    if (otherWithFindings.length > 0) {
-        md += `### Further improvements — not blocking this PR\n\n`;
-        md += formatCollapsedFindings(otherInsights, 'Expand further improvements');
-    }
+    // Collapsed detail (table + ALL findings)
+    const tableContent = formatTable(comp.factorResults, enrichedInsights);
+    md += formatCollapsedFindings(enrichedInsights, 'All findings', tableContent);
     return md;
 }
 function formatPRComment(comparisons, prNumber) {

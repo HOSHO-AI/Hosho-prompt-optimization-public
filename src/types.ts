@@ -90,6 +90,7 @@ export interface ChangeItem {
   change: string;
   impact: string;
   effect: 'positive' | 'negative' | 'mixed';
+  revert?: string;
 }
 
 // ---- Comparison Types ----

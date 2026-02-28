@@ -10,7 +10,7 @@ import {
 const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
 
-// ---- Helpers (unchanged) ----
+// ---- Helpers ----
 
 function getTrafficLightEmoji(score: number): string {
   if (score <= 4) return '🔴';
@@ -161,15 +161,14 @@ function formatTable(
   return md;
 }
 
-function formatVerdict(insights: FactorInsight[]): string {
-  const hasRegression = insights.some(
-    f => f.changeDirection === 'worse' || f.changeDirection === 'mixed'
-  );
+function formatVerdict(changeSummary?: ChangeItem[]): string {
+  if (!changeSummary || changeSummary.length === 0) return '### ✅ APPROVE THIS PR\n\n';
 
-  if (hasRegression) {
-    return '### Recommendation: ⛔ Reject PR\n\n';
-  }
-  return '### Recommendation: ✅ Approve PR\n\n';
+  const hasNegative = changeSummary.some(c => c.effect === 'negative');
+  const hasMixed = changeSummary.some(c => c.effect === 'mixed');
+
+  if (hasNegative || hasMixed) return '### ⛔ REJECT THIS PR\n\n';
+  return '### ✅ APPROVE THIS PR\n\n';
 }
 
 function formatEditLine(tagged: TaggedFinding): string {
@@ -183,22 +182,20 @@ function formatEditLine(tagged: TaggedFinding): string {
       : `§${f.codeSnippet.startLine}-${f.codeSnippet.endLine}`;
   }
 
-  // Build the "why + what to do" from issue + consideration
-  const parts: string[] = [];
-  if (f.codeSnippet?.issue) {
-    // Ensure issue ends without period, then add period
-    const issue = f.codeSnippet.issue.replace(/\.+$/, '');
-    parts.push(issue);
-  }
-  if (f.consideration) {
-    parts.push(f.consideration.replace(/\.+$/, ''));
-  }
-  const body = parts.join('. ') + '.';
+  // Show issue (why) after em-dash. Fall back to consideration if no issue.
+  const reason = f.codeSnippet?.issue || f.consideration || '';
+  const cleanReason = sanitizeInlineText(reason.replace(/\.+$/, ''));
 
-  if (sectionRef) {
-    return `**${sanitizeInlineText(title)}** (${sectionRef}) — ${sanitizeInlineText(body)}`;
+  if (sectionRef && cleanReason) {
+    return `**${sanitizeInlineText(title)}** (${sectionRef}) — ${cleanReason}`;
   }
-  return `**${sanitizeInlineText(title)}** — ${sanitizeInlineText(body)}`;
+  if (cleanReason) {
+    return `**${sanitizeInlineText(title)}** — ${cleanReason}`;
+  }
+  if (sectionRef) {
+    return `**${sanitizeInlineText(title)}** (${sectionRef})`;
+  }
+  return `**${sanitizeInlineText(title)}**`;
 }
 
 function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
@@ -226,6 +223,19 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
   return md;
 }
 
+function formatRevertSection(changeSummary?: ChangeItem[]): string {
+  if (!changeSummary) return '';
+  const reverts = changeSummary.filter(c => c.effect === 'negative' && c.revert);
+  if (reverts.length === 0) return '';
+
+  let md = '### Revert before merging\n\n';
+  for (const item of reverts) {
+    md += `- ${sanitizeInlineText(item.revert!)}\n`;
+  }
+  md += '\n';
+  return md;
+}
+
 function formatFindingDetail(finding: Finding): string {
   let md = '';
 
@@ -246,7 +256,7 @@ function formatFindingDetail(finding: Finding): string {
     md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
   }
 
-  md += `**Potential prompt edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
+  md += `**Suggested edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
 
   if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
     const rewriteFence = getCodeFence(finding.rewrittenCode);
@@ -260,16 +270,21 @@ function formatFindingDetail(finding: Finding): string {
 function formatCollapsedFindings(
   insights: FactorInsight[],
   summaryLabel: string,
+  tableContent?: string,
 ): string {
   // Gather insights that have findings
   const withFindings = insights.filter(f => f.findings.length > 0);
-  if (withFindings.length === 0) return '';
+  if (withFindings.length === 0 && !tableContent) return '';
 
   const totalFindings = withFindings.reduce((sum, f) => sum + f.findings.length, 0);
   const factorCount = withFindings.length;
 
   let md = `<details><summary>${summaryLabel} (${totalFindings} across ${factorCount} factor${factorCount === 1 ? '' : 's'})</summary>\n\n`;
   md += `<br>\n\n`;
+
+  if (tableContent) {
+    md += tableContent;
+  }
 
   for (const insight of withFindings) {
     md += `---\n\n`;
@@ -299,7 +314,7 @@ export function formatOnDemandSummary(
   // Top 3 edits
   const allFindings = gatherFindings(enrichedInsights);
   if (allFindings.length > 0) {
-    md += `### Top edits\n\n`;
+    md += `### Top 3 edits\n\n`;
     md += formatTopEdits(allFindings, 3);
   }
 
@@ -325,36 +340,25 @@ function formatPRFileSection(
     prNumber,
   );
 
-  // Verdict
-  md += formatVerdict(enrichedInsights);
+  // Verdict (based on changeSummary)
+  md += formatVerdict(comp.changeSummary);
 
-  // Table
-  md += formatTable(comp.factorResults, enrichedInsights);
-
-  // What changed
+  // What changed in this PR
   md += formatWhatChanged(comp.changeSummary);
 
-  // Split findings: PR-caused vs pre-existing
-  const prCausedInsights = enrichedInsights.filter(
-    f => f.changeDirection === 'worse' || f.changeDirection === 'mixed'
-  );
-  const otherInsights = enrichedInsights.filter(
-    f => f.changeDirection !== 'worse' && f.changeDirection !== 'mixed'
-  );
+  // Revert before merging (conditional — only if ❌ items with revert instructions)
+  md += formatRevertSection(comp.changeSummary);
 
-  // Fix before merging (PR-caused findings only)
-  const prFindings = gatherFindings(prCausedInsights);
-  if (prFindings.length > 0) {
-    md += `### Priority edits before merging\n\n`;
-    md += formatTopEdits(prFindings, 3);
+  // Top 3 edits to further improve this prompt (ALL findings, whole prompt)
+  const allFindings = gatherFindings(enrichedInsights);
+  if (allFindings.length > 0) {
+    md += `### Top 3 edits to further improve this prompt\n\n`;
+    md += formatTopEdits(allFindings, 3);
   }
 
-  // Further improvements (non-PR findings, collapsed)
-  const otherWithFindings = otherInsights.filter(f => f.findings.length > 0);
-  if (otherWithFindings.length > 0) {
-    md += `### Further improvements — not blocking this PR\n\n`;
-    md += formatCollapsedFindings(otherInsights, 'Expand further improvements');
-  }
+  // Collapsed detail (table + ALL findings)
+  const tableContent = formatTable(comp.factorResults, enrichedInsights);
+  md += formatCollapsedFindings(enrichedInsights, 'All findings', tableContent);
 
   return md;
 }
