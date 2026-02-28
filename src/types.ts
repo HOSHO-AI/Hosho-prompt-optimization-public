@@ -84,6 +84,15 @@ export interface SynthesisResult {
   factorInsights: FactorInsight[];
 }
 
+// ---- Change Summary (from batch diff) ----
+
+export interface ChangeItem {
+  change: string;
+  impact: string;
+  effect: 'positive' | 'negative' | 'mixed';
+  revert?: string;
+}
+
 // ---- Comparison Types ----
 
 export interface FactorDelta {
@@ -99,6 +108,9 @@ export interface FactorDelta {
 export interface ComparisonResult {
   promptFile: string;
   isNewFile: boolean;
+  targetModelFamily?: string;
+  targetModelName?: string;
+  changeSummary?: ChangeItem[];
   synthesis: SynthesisResult;
   factorResults: FactorEvaluationResult[];
   deltas: FactorDelta[];

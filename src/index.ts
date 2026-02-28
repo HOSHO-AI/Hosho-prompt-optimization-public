@@ -143,7 +143,12 @@ async function runPRMode(
   core.info(`API returned ${apiResponse.results.length} evaluation(s).`);
 
   // Step 4: Map API results to ComparisonResult[]
-  const comparisons: ComparisonResult[] = apiResponse.results.map(r => r.comparison);
+  const comparisons: ComparisonResult[] = apiResponse.results.map(r => ({
+    ...r.comparison,
+    targetModelFamily: r.targetModelFamily,
+    targetModelName: r.targetModelName,
+    changeSummary: r.changeSummary,
+  }));
 
   // Normalize after JSON round-trip (undefined fields get stripped by JSON.stringify)
   for (const comp of comparisons) {
@@ -158,7 +163,7 @@ async function runPRMode(
 
   // Step 5: Post PR comment
   core.info('Posting PR review comment...');
-  const commentBody = formatPRComment(comparisons);
+  const commentBody = formatPRComment(comparisons, pullNumber);
   await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
 
   // Step 6: Post review verdict
@@ -172,7 +177,7 @@ async function runPRMode(
 
   // Step 7: Write Job Summary
   core.info('Writing Job Summary...');
-  const summaryBody = formatJobSummary(comparisons);
+  const summaryBody = formatJobSummary(comparisons, pullNumber);
   await core.summary.addRaw(summaryBody).write();
 
   // Step 8: Set outputs
@@ -228,7 +233,7 @@ async function runOnDemandMode(
 
   // Write Job Summary
   core.info('Writing Job Summary...');
-  const summaryBody = formatOnDemandSummary(result.synthesis, result.factorResults);
+  const summaryBody = formatOnDemandSummary(result.synthesis, result.factorResults, result.targetModelFamily, result.targetModelName);
   await core.summary.addRaw(summaryBody).write();
 
   // Set outputs
