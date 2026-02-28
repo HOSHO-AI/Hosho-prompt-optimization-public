@@ -99,6 +99,7 @@ export interface FactorDelta {
 export interface ComparisonResult {
   promptFile: string;
   isNewFile: boolean;
+  targetModelFamily?: string;
   synthesis: SynthesisResult;
   factorResults: FactorEvaluationResult[];
   deltas: FactorDelta[];

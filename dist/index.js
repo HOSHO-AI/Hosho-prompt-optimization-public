@@ -450,7 +450,10 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     }
     core.info(`API returned ${apiResponse.results.length} evaluation(s).`);
     // Step 4: Map API results to ComparisonResult[]
-    const comparisons = apiResponse.results.map(r => r.comparison);
+    const comparisons = apiResponse.results.map(r => ({
+        ...r.comparison,
+        targetModelFamily: r.targetModelFamily,
+    }));
     // Normalize after JSON round-trip (undefined fields get stripped by JSON.stringify)
     for (const comp of comparisons) {
         for (const insight of comp.synthesis.factorInsights) {
@@ -466,7 +469,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     }
     // Step 5: Post PR comment
     core.info('Posting PR review comment...');
-    const commentBody = (0, output_formatter_1.formatPRComment)(comparisons);
+    const commentBody = (0, output_formatter_1.formatPRComment)(comparisons, pullNumber);
     await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
     // Step 6: Post review verdict
     const anyCritical = comparisons.some((c) => c.hasCriticalIssue);
@@ -474,7 +477,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     await postReviewVerdict(octokit, owner, repo, pullNumber, headSha, anyCritical || anyRegression);
     // Step 7: Write Job Summary
     core.info('Writing Job Summary...');
-    const summaryBody = (0, output_formatter_1.formatJobSummary)(comparisons);
+    const summaryBody = (0, output_formatter_1.formatJobSummary)(comparisons, pullNumber);
     await core.summary.addRaw(summaryBody).write();
     // Step 8: Set outputs
     const overallScores = comparisons.map((c) => c.synthesis.overallScore);
@@ -513,7 +516,7 @@ async function runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeo
     const result = apiResponse.results[0];
     // Write Job Summary
     core.info('Writing Job Summary...');
-    const summaryBody = (0, output_formatter_1.formatOnDemandSummary)(result.synthesis, result.factorResults);
+    const summaryBody = (0, output_formatter_1.formatOnDemandSummary)(result.synthesis, result.factorResults, result.targetModelFamily);
     await core.summary.addRaw(summaryBody).write();
     // Set outputs
     core.setOutput('overall_score', result.synthesis.overallScore);
@@ -596,204 +599,306 @@ run();
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.BOT_MARKER = void 0;
+exports.formatOnDemandSummary = formatOnDemandSummary;
 exports.formatPRComment = formatPRComment;
 exports.formatJobSummary = formatJobSummary;
-exports.formatOnDemandSummary = formatOnDemandSummary;
 const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
 exports.BOT_MARKER = BOT_MARKER;
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
-/**
- * Returns traffic light emoji based on score (1-10 scale).
- * 1-4: Critical (red), 5-7: Needs Work (yellow), 8-10: Good (green)
- */
+// ---- Helpers (unchanged) ----
 function getTrafficLightEmoji(score) {
     if (score <= 4)
-        return '🔴'; // 1-4: Critical (red)
+        return '🔴';
     if (score <= 7)
-        return '🟡'; // 5-7: Needs Work (yellow)
-    return '🟢'; // 8-10: Good (green)
+        return '🟡';
+    return '🟢';
 }
-/**
- * Returns change emoji/label based on change direction.
- */
 function getChangeEmoji(direction) {
     if (direction === 'improved')
-        return '✅<br>Improved';
+        return '✅';
     if (direction === 'worse')
-        return '⚠️<br>Worse';
+        return '⚠️ Worse';
     if (direction === 'mixed')
-        return '🔄<br>Mixed';
-    return '➖<br>No change';
+        return '🔄 Mixed';
+    return '➖';
 }
-/**
- * Generates PR review verdict based on change direction.
- * In PR mode: REJECT if anything got worse or had mixed changes, ACCEPT otherwise
- * Returns empty string in on-demand mode (no verdict needed)
- */
-function formatPRVerdict(factorInsights) {
-    // Check if we're in PR mode
-    const isPRMode = factorInsights.some(f => f.changeDirection);
-    if (!isPRMode) {
-        return ''; // On-demand mode - no verdict
-    }
-    // Check for any regressions (worse OR mixed)
-    const worseFactors = factorInsights.filter(f => f.changeDirection === 'worse');
-    const mixedFactors = factorInsights.filter(f => f.changeDirection === 'mixed');
-    const regressingFactors = [...worseFactors, ...mixedFactors];
-    if (regressingFactors.length > 0) {
-        // Build specific regression message
-        const parts = [];
-        if (worseFactors.length > 0) {
-            parts.push(`${worseFactors.map(f => f.factorName).join(', ')} regressed`);
-        }
-        if (mixedFactors.length > 0) {
-            parts.push(`${mixedFactors.map(f => f.factorName).join(', ')} had mixed changes (includes regressions)`);
-        }
-        let verdict = `**Review verdict:** ⛔ REJECT — ${parts.join('; ')}.`;
-        // Note what would be accepted
-        const improvedFactors = factorInsights.filter(f => f.changeDirection === 'improved');
-        if (improvedFactors.length > 0) {
-            verdict += ` Remaining changes improve quality and would be accepted.`;
-        }
-        return verdict + '\n\n';
-    }
-    // No regressions — APPROVE with remaining issues count
-    const remainingIssues = factorInsights.filter(f => f.score <= 4).length; // 1-4 is red zone
-    const opportunities = factorInsights.filter(f => f.score >= 5 && f.score <= 7).length; // 5-7 is yellow zone
-    let verdict = `**Review verdict:** ✅ APPROVE — Changes improve or maintain quality.`;
-    if (remainingIssues > 0 || opportunities > 0) {
-        const parts = [];
-        if (remainingIssues > 0) {
-            parts.push(`${remainingIssues} critical gap${remainingIssues === 1 ? '' : 's'}`);
-        }
-        if (opportunities > 0) {
-            parts.push(`${opportunities} improvement opportunity${opportunities === 1 ? 'y' : 'ies'}`);
-        }
-        verdict += ` ${parts.join(' and ')} remain for future work.`;
-    }
-    return verdict + '\n\n';
+function getChangeBulletEmoji(direction) {
+    if (direction === 'improved')
+        return '✅';
+    if (direction === 'worse')
+        return '❌';
+    if (direction === 'mixed')
+        return '⚠️';
+    return '';
 }
-/**
- * Removes common section header patterns from code snippets to reduce user confusion.
- *
- * When Claude extracts code snippets, it sometimes includes structural headers like
- * "3) Output (strict)" or "## Instructions". These confuse users because numbering
- * looks like finding numbers and labels lack context.
- *
- * @param code - Raw code snippet extracted by Claude
- * @returns Cleaned code with section headers removed
- */
 function cleanCodeSnippet(code) {
     const lines = code.split('\n');
     const cleaned = [];
     for (const line of lines) {
         const trimmed = line.trim();
-        // Keep empty lines for formatting
         if (!trimmed) {
             cleaned.push(line);
             continue;
         }
-        // Skip if line matches section header patterns
-        if (isSectionHeader(trimmed)) {
+        if (isSectionHeader(trimmed))
             continue;
-        }
         cleaned.push(line);
     }
     const result = cleaned.join('\n').trim();
-    // Safety: if we stripped everything, return original
-    if (!result && code.trim()) {
+    if (!result && code.trim())
         return code;
-    }
     return result;
 }
-/**
- * Escapes triple backtick sequences in plain text to prevent
- * accidental code block creation inside <details> blocks.
- */
 function sanitizeInlineText(text) {
     if (!text)
         return text;
     return text.replace(/`{3,}/g, (match) => '\\`'.repeat(match.length));
 }
-/**
- * Returns a code fence delimiter that won't conflict with content.
- * If content contains ```, uses ```` (4 backticks), etc.
- */
 function getCodeFence(content) {
     let maxRun = 0;
     const matches = content.match(/`{3,}/g);
     if (matches) {
-        for (const m of matches) {
+        for (const m of matches)
             maxRun = Math.max(maxRun, m.length);
-        }
     }
     return '`'.repeat(Math.max(3, maxRun + 1));
 }
-/**
- * Detects if a line matches common section header patterns.
- *
- * Conservative matching to avoid false positives:
- * - Must start at line beginning (no indentation)
- * - Must match known structural patterns
- * - Requires capital letter after marker for numbered sections
- */
 function isSectionHeader(line) {
-    // Skip indented lines - likely code, not headers
-    if (line !== line.trim()) {
+    if (line !== line.trim())
         return false;
-    }
-    // Strip common annotations before pattern matching
-    // This removes "(strict)", "(optional)", "(required)" etc.
     const cleanedLine = line.replace(/\s*\([^)]+\)\s*$/g, '').trim();
-    // Pattern 1: Numbered sections with capital letter: "1) Output", "3) Instructions (strict)"
-    // Does NOT match: "1) analyze input" (lowercase after marker)
-    // Now matches "3) Output (strict)" because "(strict)" is stripped first
-    if (/^\d+\)\s+[A-Z]/.test(cleanedLine)) {
+    if (/^\d+\)\s+[A-Z]/.test(cleanedLine))
         return true;
-    }
-    // Pattern 2a: Markdown headers with numbered sections: "## 3) Output", "### 2) Instructions"
-    if (/^#{1,6}\s+\d+\)\s+[A-Z]/.test(cleanedLine)) {
+    if (/^#{1,6}\s+\d+\)\s+[A-Z]/.test(cleanedLine))
         return true;
-    }
-    // Pattern 2b: Markdown headers: "# Section", "## Instructions", "### Details"
-    if (/^#{1,6}\s+[A-Z]/.test(cleanedLine)) {
+    if (/^#{1,6}\s+[A-Z]/.test(cleanedLine))
         return true;
-    }
-    // Pattern 3: Section labels with colons: "Output:", "Instructions:", "Process:"
-    // Limit to reasonable header length (1-30 chars before colon)
-    if (/^[A-Z][a-zA-Z\s]{1,30}:\s*$/.test(cleanedLine)) {
+    if (/^[A-Z][a-zA-Z\s]{1,30}:\s*$/.test(cleanedLine))
         return true;
-    }
-    // Pattern 4: Horizontal rules (markdown separators)
-    if (/^-{3,}$/.test(line) || /^={3,}$/.test(line) || /^\*{3,}$/.test(line)) {
+    if (/^-{3,}$/.test(line) || /^={3,}$/.test(line) || /^\*{3,}$/.test(line))
         return true;
-    }
     return false;
 }
-/**
- * Merges authoritative findings from factorResults into factorInsights.
- * Synthesis may drop or fail to copy findings — factorResults are the source of truth.
- */
 function mergeFindings(factorInsights, factorResults) {
     return factorInsights.map(insight => {
         const result = factorResults.find(fr => fr.factorId === insight.factorId);
-        if (result) {
+        if (result)
             return { ...insight, findings: result.findings };
-        }
         return insight;
     });
 }
-// ---- PR Comment ----
-function formatPRComment(comparisons) {
-    const fileCount = comparisons.length;
-    const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
-    let md = `${BOT_MARKER}\n`;
-    md += `# Hosho Bot — Prompt Review\n\n`;
-    md += `Reviewed ${fileCount} prompt file(s) against ${factorCount} factors.\n\n`;
+function safeDescription(description) {
+    return description
+        .replace(/```[\s\S]*?```/g, '')
+        .replace(/`{3,}/g, '')
+        .replace(/\n/g, ' ')
+        .trim();
+}
+function gatherFindings(insights) {
+    const all = [];
+    for (const insight of insights) {
+        for (const finding of insight.findings) {
+            all.push({ finding, factorName: insight.factorName, factorScore: insight.score });
+        }
+    }
+    // Sort by score ascending (lowest = most impactful)
+    all.sort((a, b) => a.factorScore - b.factorScore);
+    return all;
+}
+// ---- Format building blocks ----
+function formatHeader(filename, description, targetModelFamily, prNumber) {
+    const title = prNumber
+        ? `## PR Review: #${prNumber} → ${filename}`
+        : `## Prompt Review: ${filename}`;
+    let md = `${title}\n`;
+    md += `${safeDescription(description)}\n`;
+    if (targetModelFamily) {
+        const familyLabel = targetModelFamily.charAt(0).toUpperCase() + targetModelFamily.slice(1);
+        md += `Target model: ${familyLabel}\n`;
+    }
+    md += '\n';
+    return md;
+}
+function formatTable(factorResults, insights) {
+    const isPRMode = insights.some(f => f.changeDirection);
+    let md = '';
+    if (isPRMode) {
+        md += `| Factor | PR Impact | Rating |\n`;
+        md += `|---|---|---|`;
+    }
+    else {
+        md += `| Factor | Rating |\n`;
+        md += `|---|---|`;
+    }
+    for (const factor of factorResults) {
+        const emoji = getTrafficLightEmoji(factor.score);
+        const insight = insights.find(f => f.factorId === factor.factorId);
+        if (isPRMode && insight?.changeDirection) {
+            const changeEmoji = getChangeEmoji(insight.changeDirection);
+            md += `\n| ${factor.factorName} | ${changeEmoji} | ${emoji} |`;
+        }
+        else {
+            md += `\n| ${factor.factorName} | ${emoji} |`;
+        }
+    }
+    md += '\n\n';
+    return md;
+}
+function formatVerdict(insights) {
+    const hasRegression = insights.some(f => f.changeDirection === 'worse' || f.changeDirection === 'mixed');
+    if (hasRegression) {
+        return '### ⛔ REJECT\n\n';
+    }
+    return '### ✅ APPROVE\n\n';
+}
+function formatEditLine(tagged) {
+    const f = tagged.finding;
+    const title = f.description || 'Improvement';
+    let sectionRef = '';
+    if (f.codeSnippet) {
+        sectionRef = f.codeSnippet.startLine === f.codeSnippet.endLine
+            ? `§${f.codeSnippet.startLine}`
+            : `§${f.codeSnippet.startLine}-${f.codeSnippet.endLine}`;
+    }
+    // Build the "why + what to do" from issue + consideration
+    const parts = [];
+    if (f.codeSnippet?.issue) {
+        // Ensure issue ends without period, then add period
+        const issue = f.codeSnippet.issue.replace(/\.+$/, '');
+        parts.push(issue);
+    }
+    if (f.consideration) {
+        parts.push(f.consideration.replace(/\.+$/, ''));
+    }
+    const body = parts.join('. ') + '.';
+    if (sectionRef) {
+        return `**${sanitizeInlineText(title)}** (${sectionRef}) — ${sanitizeInlineText(body)}`;
+    }
+    return `**${sanitizeInlineText(title)}** — ${sanitizeInlineText(body)}`;
+}
+function formatTopEdits(tagged, limit = 3) {
+    if (tagged.length === 0)
+        return '';
+    const top = tagged.slice(0, limit);
+    let md = '';
+    for (let i = 0; i < top.length; i++) {
+        md += `${i + 1}. ${formatEditLine(top[i])}\n\n`;
+    }
+    return md;
+}
+function formatWhatChanged(insights) {
+    const bullets = [];
+    for (const insight of insights) {
+        if (!insight.changeDirection || insight.changeDirection === 'no-change')
+            continue;
+        if (!insight.changeDetails || insight.changeDetails.length === 0)
+            continue;
+        const emoji = getChangeBulletEmoji(insight.changeDirection);
+        for (const detail of insight.changeDetails) {
+            bullets.push(`- ${emoji} ${sanitizeInlineText(detail)}`);
+        }
+    }
+    if (bullets.length === 0)
+        return '';
+    let md = `### What changed\n\n`;
+    md += bullets.join('\n') + '\n\n';
+    return md;
+}
+function formatFindingDetail(finding) {
+    let md = '';
+    const title = finding.codeSnippet?.issue || finding.description;
+    if (finding.codeSnippet && finding.codeSnippet.code.trim()) {
+        const lineRef = finding.codeSnippet.startLine === finding.codeSnippet.endLine
+            ? `${finding.codeSnippet.startLine}`
+            : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
+        md += `<h4>${finding.findingNumber}. ${title} (line ${lineRef})</h4>\n\n`;
+        const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
+        if (cleanedCode.trim()) {
+            const codeFence = getCodeFence(cleanedCode);
+            md += `${codeFence}\n${cleanedCode}\n${codeFence}\n\n`;
+        }
+    }
+    else {
+        md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
+    }
+    md += `**Potential prompt edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
+    if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
+        const rewriteFence = getCodeFence(finding.rewrittenCode);
+        md += `${rewriteFence}\n${finding.rewrittenCode}\n${rewriteFence}\n\n`;
+    }
     md += `---\n\n`;
+    return md;
+}
+function formatCollapsedFindings(insights, summaryLabel) {
+    // Gather insights that have findings
+    const withFindings = insights.filter(f => f.findings.length > 0);
+    if (withFindings.length === 0)
+        return '';
+    const totalFindings = withFindings.reduce((sum, f) => sum + f.findings.length, 0);
+    const factorCount = withFindings.length;
+    let md = `<details><summary>${summaryLabel} (${totalFindings} across ${factorCount} factor${factorCount === 1 ? '' : 's'})</summary>\n\n`;
+    md += `<br>\n\n`;
+    for (const insight of withFindings) {
+        md += `#### ${insight.factorName}\n\n`;
+        for (const finding of insight.findings) {
+            md += formatFindingDetail(finding);
+        }
+    }
+    md += `</details>\n\n`;
+    return md;
+}
+// ---- On-demand output ----
+function formatOnDemandSummary(synthesis, factorResults, targetModelFamily) {
+    const enrichedInsights = mergeFindings(synthesis.factorInsights, factorResults);
+    let md = formatHeader(synthesis.promptFile, synthesis.promptDescription, targetModelFamily);
+    md += formatTable(factorResults, enrichedInsights);
+    // Top 3 edits
+    const allFindings = gatherFindings(enrichedInsights);
+    if (allFindings.length > 0) {
+        md += `### Top ${Math.min(3, allFindings.length)} edit${allFindings.length === 1 ? '' : 's'}\n\n`;
+        md += formatTopEdits(allFindings, 3);
+    }
+    // Collapsed detail
+    md += formatCollapsedFindings(enrichedInsights, 'All findings');
+    return md;
+}
+// ---- PR output ----
+function formatPRFileSection(comp, prNumber) {
+    const enrichedInsights = mergeFindings(comp.synthesis.factorInsights, comp.factorResults);
+    let md = formatHeader(comp.promptFile, comp.synthesis.promptDescription, comp.targetModelFamily, prNumber);
+    // Verdict
+    md += formatVerdict(enrichedInsights);
+    // Table
+    md += formatTable(comp.factorResults, enrichedInsights);
+    // What changed
+    md += formatWhatChanged(enrichedInsights);
+    // Split findings: PR-caused vs pre-existing
+    const prCausedInsights = enrichedInsights.filter(f => f.changeDirection === 'worse' || f.changeDirection === 'mixed');
+    const otherInsights = enrichedInsights.filter(f => f.changeDirection !== 'worse' && f.changeDirection !== 'mixed');
+    // Fix before merging (PR-caused findings only)
+    const prFindings = gatherFindings(prCausedInsights);
+    if (prFindings.length > 0) {
+        md += `### Fix before merging\n\n`;
+        md += formatTopEdits(prFindings, 3);
+    }
+    // Further improvements (non-PR findings, collapsed)
+    const otherWithFindings = otherInsights.filter(f => f.findings.length > 0);
+    if (otherWithFindings.length > 0) {
+        const totalOther = otherWithFindings.reduce((sum, f) => sum + f.findings.length, 0);
+        const factorCount = otherWithFindings.length;
+        md += `### Further improvements — not blocking this PR\n\n`;
+        md += `> ${totalOther} additional finding${totalOther === 1 ? '' : 's'} across ${factorCount} factor${factorCount === 1 ? '' : 's'} represent${totalOther === 1 ? 's' : ''}\n`;
+        md += `> opportunities in the broader prompt, independent of this PR's changes.\n\n`;
+        md += formatCollapsedFindings(otherInsights, 'Expand further improvements');
+    }
+    return md;
+}
+function formatPRComment(comparisons, prNumber) {
+    let md = `${BOT_MARKER}\n`;
     for (const comp of comparisons) {
-        md += formatFileSection(comp);
-        md += `\n---\n\n`;
+        md += formatPRFileSection(comp, prNumber);
+        if (comparisons.length > 1)
+            md += `\n---\n\n`;
     }
     // Truncate if needed
     if (md.length > PR_COMMENT_MAX_LENGTH) {
@@ -803,177 +908,13 @@ function formatPRComment(comparisons) {
     md += `\n*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
     return md;
 }
-function formatFileSection(comp) {
-    const enrichedInsights = mergeFindings(comp.synthesis.factorInsights, comp.factorResults);
-    let md = formatPromptHeader(comp.promptFile, comp.synthesis.promptDescription);
-    md += formatEvaluationTable(comp.factorResults, enrichedInsights);
-    // Add PR verdict right after table (PR mode only)
-    md += formatPRVerdict(enrichedInsights);
-    md += formatRecommendations(enrichedInsights);
-    return md;
-}
-function formatPromptHeader(promptFile, description) {
-    // Strip any markdown code fences/blocks that would break subsequent rendering
-    const safeDescription = description
-        .replace(/```[\s\S]*?```/g, '') // Strip code blocks
-        .replace(/`{3,}/g, '') // Strip orphan fence markers
-        .replace(/\n/g, ' ') // Collapse to single line
-        .trim();
-    return `## \`${promptFile}\`\n\n**Prompt overview:** ${safeDescription}\n\n`;
-}
-function formatEvaluationTable(factorResults, factorInsights) {
-    let md = `### Evaluation\n\n`;
-    // Check if any factor has change direction (PR mode indicator)
-    const isPRMode = factorInsights.some(f => f.changeDirection);
-    if (isPRMode) {
-        md += `| Factor | Impact of PR | Factor Assessment | Rationale |\n`;
-        md += `|--------|:------------:|:-----------------:|-----------|`;
-    }
-    else {
-        md += `| Factor | Factor Assessment | Rationale |\n`;
-        md += `|--------|:-----------------:|-----------|`;
-    }
-    for (const factor of factorResults) {
-        const emoji = getTrafficLightEmoji(factor.score);
-        const insight = factorInsights.find(f => f.factorId === factor.factorId);
-        let rationale = factor.tableRationale;
-        // In PR mode, show factor assessment and PR impact as labeled lines
-        if (isPRMode && insight?.changeRationale) {
-            rationale = `**Impact of PR:** ${insight.changeRationale}<br>**Factor assessment:** ${factor.tableRationale}`;
-        }
-        // Escape pipe characters to prevent breaking table columns
-        const safeRationale = rationale.replace(/\|/g, '\\|');
-        if (isPRMode && insight?.changeDirection) {
-            const changeEmoji = getChangeEmoji(insight.changeDirection);
-            md += `\n| **${factor.factorName}** | ${changeEmoji} | ${emoji} | ${safeRationale} |`;
-        }
-        else {
-            md += `\n| **${factor.factorName}** | ${emoji} | ${safeRationale} |`;
-        }
-    }
-    return md + `\n\n---\n\n`;
-}
-function formatRecommendations(factorInsights) {
-    const critical = factorInsights.filter(f => f.score <= 4); // 1-4: Critical (red)
-    const opportunities = factorInsights.filter(f => f.score >= 5 && f.score <= 7); // 5-7: Needs Work (yellow)
-    if (critical.length === 0 && opportunities.length === 0) {
-        return ''; // No considerations needed
-    }
-    let md = `### Considerations\n\n`;
-    if (critical.length > 0) {
-        md += `#### 🔴 Major Gaps\n\n`;
-        for (const factor of critical) {
-            md += formatFactorFindings(factor);
-        }
-    }
-    if (opportunities.length > 0) {
-        md += `#### 🟡 Opportunities to Improve\n\n`;
-        for (const factor of opportunities) {
-            md += formatFactorFindings(factor);
-        }
-    }
-    return md;
-}
-function formatFactorFindings(factor) {
-    if (factor.findings.length === 0 && !factor.changeDetails) {
-        return ''; // No findings and no PR changes
-    }
-    const findingCount = factor.findings.length;
-    const hasChanges = factor.changeDetails && factor.changeDetails.length > 0;
-    let label = '';
-    if (hasChanges && findingCount > 0) {
-        label = `${findingCount} improvement${findingCount === 1 ? '' : 's'} + PR changes`;
-    }
-    else if (hasChanges) {
-        label = 'PR changes only';
-    }
-    else {
-        label = findingCount === 1 ? '1 finding' : `${findingCount} findings`;
-    }
-    let md = `<details>\n`;
-    md += `<summary><strong>${factor.factorName}</strong> — ${label}</summary>\n\n`;
-    md += `<br>\n\n`;
-    // Detect if we're in PR mode (changeDirection exists)
-    const isPRMode = factor.changeDirection !== undefined;
-    // Section 1: Changes in PR
-    if (isPRMode) {
-        md += `<h4>Changes in this PR</h4>\n\n`;
-        if (hasChanges) {
-            // Has meaningful changes - show bullet points
-            for (const change of factor.changeDetails) {
-                md += `- ${sanitizeInlineText(change)}\n`;
-            }
-        }
-        else {
-            // PR mode but no meaningful changes - show brief statement
-            md += `No observed changes in this PR.\n`;
-        }
-        md += `\n---\n\n`;
-    }
-    // Section 2: Further improvements (existing findings)
-    if (factor.findings.length > 0) {
-        if (isPRMode) {
-            md += `<h4>Further improvements</h4>\n\n`;
-        }
-        for (const finding of factor.findings) {
-            // Determine title: use short issue if available, else use description
-            const title = finding.codeSnippet?.issue || finding.description;
-            // Title with line reference in brackets when code snippet is available
-            if (finding.codeSnippet && finding.codeSnippet.code.trim()) {
-                const lineRef = finding.codeSnippet.startLine === finding.codeSnippet.endLine
-                    ? `${finding.codeSnippet.startLine}`
-                    : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
-                md += `<h4>${finding.findingNumber}. ${title} (line ${lineRef})</h4>\n\n`;
-                // Clean section headers from code
-                const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
-                // Render code block if non-empty (dynamic fence to avoid nested ``` conflicts)
-                if (cleanedCode.trim()) {
-                    const codeFence = getCodeFence(cleanedCode);
-                    md += `${codeFence}\n${cleanedCode}\n${codeFence}\n\n`;
-                }
-            }
-            else {
-                md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
-            }
-            // Recommendation
-            md += `**Potential prompt edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
-            // Rewritten code (if present and not empty)
-            if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
-                const rewriteFence = getCodeFence(finding.rewrittenCode);
-                md += `${rewriteFence}\n${finding.rewrittenCode}\n${rewriteFence}\n\n`;
-            }
-            md += `---\n\n`;
-        }
-    }
-    md += `</details>\n\n`;
-    return md;
-}
-// ---- Job Summary (PR mode) ----
-function formatJobSummary(comparisons) {
-    const fileCount = comparisons.length;
-    const factorCount = comparisons.length > 0 ? comparisons[0].factorResults.length : 0;
-    let md = `# Hosho Bot — Prompt Review\n\n`;
-    md += `Reviewed ${fileCount} prompt file(s) against ${factorCount} factors.\n`;
-    md += `Mode: Pull Request\n\n`;
-    md += `---\n\n`;
+function formatJobSummary(comparisons, prNumber) {
+    let md = '';
     for (const comp of comparisons) {
-        md += formatFileSection(comp);
-        md += `\n---\n\n`;
+        md += formatPRFileSection(comp, prNumber);
+        if (comparisons.length > 1)
+            md += `\n---\n\n`;
     }
-    return md;
-}
-// ---- On-Demand Summary ----
-function formatOnDemandSummary(synthesis, factorResults) {
-    const factorCount = factorResults.length;
-    let md = `# Hosho Bot — Prompt Review\n\n`;
-    md += `Reviewed 1 prompt file against ${factorCount} factors.\n`;
-    md += `Mode: On-Demand\n\n`;
-    md += `---\n\n`;
-    const enrichedInsights = mergeFindings(synthesis.factorInsights, factorResults);
-    md += formatPromptHeader(synthesis.promptFile, synthesis.promptDescription);
-    md += formatEvaluationTable(factorResults, enrichedInsights);
-    md += formatRecommendations(enrichedInsights);
-    md += `\n---\n\n`;
     return md;
 }
 //# sourceMappingURL=output-formatter.js.map
