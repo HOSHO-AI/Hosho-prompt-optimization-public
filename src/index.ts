@@ -146,6 +146,7 @@ async function runPRMode(
   const comparisons: ComparisonResult[] = apiResponse.results.map(r => ({
     ...r.comparison,
     targetModelFamily: r.targetModelFamily,
+    targetModelName: r.targetModelName,
   }));
 
   // Normalize after JSON round-trip (undefined fields get stripped by JSON.stringify)
@@ -231,7 +232,7 @@ async function runOnDemandMode(
 
   // Write Job Summary
   core.info('Writing Job Summary...');
-  const summaryBody = formatOnDemandSummary(result.synthesis, result.factorResults, result.targetModelFamily);
+  const summaryBody = formatOnDemandSummary(result.synthesis, result.factorResults, result.targetModelFamily, result.targetModelName);
   await core.summary.addRaw(summaryBody).write();
 
   // Set outputs

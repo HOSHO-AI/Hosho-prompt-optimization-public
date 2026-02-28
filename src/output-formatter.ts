@@ -115,6 +115,7 @@ function formatHeader(
   filename: string,
   description: string,
   targetModelFamily?: string,
+  targetModelName?: string,
   prNumber?: number,
 ): string {
   const title = prNumber
@@ -125,7 +126,11 @@ function formatHeader(
   md += `${safeDescription(description)}\n`;
   if (targetModelFamily) {
     const familyLabel = targetModelFamily.charAt(0).toUpperCase() + targetModelFamily.slice(1);
-    md += `Target model: ${familyLabel}\n`;
+    if (targetModelName) {
+      md += `Target model: ${familyLabel} (${targetModelName})\n`;
+    } else {
+      md += `Target model: ${familyLabel}\n`;
+    }
   }
   md += '\n';
   return md;
@@ -214,22 +219,40 @@ function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
 }
 
 function formatWhatChanged(insights: FactorInsight[]): string {
-  const bullets: string[] = [];
+  const attention: string[] = [];
+  const improved: string[] = [];
 
   for (const insight of insights) {
     if (!insight.changeDirection || insight.changeDirection === 'no-change') continue;
     if (!insight.changeDetails || insight.changeDetails.length === 0) continue;
 
     const emoji = getChangeBulletEmoji(insight.changeDirection);
+    const isAttention = insight.changeDirection === 'worse' || insight.changeDirection === 'mixed';
+
     for (const detail of insight.changeDetails) {
-      bullets.push(`- ${emoji} ${sanitizeInlineText(detail)}`);
+      const bullet = `- ${emoji} ${sanitizeInlineText(detail)}`;
+      if (isAttention) {
+        attention.push(bullet);
+      } else {
+        improved.push(bullet);
+      }
     }
   }
 
-  if (bullets.length === 0) return '';
+  if (attention.length === 0 && improved.length === 0) return '';
 
   let md = `### What changed\n\n`;
-  md += bullets.join('\n') + '\n\n';
+
+  if (attention.length > 0) {
+    if (improved.length > 0) md += `**Needs attention:**\n`;
+    md += attention.join('\n') + '\n\n';
+  }
+
+  if (improved.length > 0) {
+    if (attention.length > 0) md += `**Improved:**\n`;
+    md += improved.join('\n') + '\n\n';
+  }
+
   return md;
 }
 
@@ -295,10 +318,11 @@ export function formatOnDemandSummary(
   synthesis: SynthesisResult,
   factorResults: FactorEvaluationResult[],
   targetModelFamily?: string,
+  targetModelName?: string,
 ): string {
   const enrichedInsights = mergeFindings(synthesis.factorInsights, factorResults);
 
-  let md = formatHeader(synthesis.promptFile, synthesis.promptDescription, targetModelFamily);
+  let md = formatHeader(synthesis.promptFile, synthesis.promptDescription, targetModelFamily, targetModelName);
   md += formatTable(factorResults, enrichedInsights);
 
   // Top 3 edits
@@ -326,6 +350,7 @@ function formatPRFileSection(
     comp.promptFile,
     comp.synthesis.promptDescription,
     comp.targetModelFamily,
+    comp.targetModelName,
     prNumber,
   );
 

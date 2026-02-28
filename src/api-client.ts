@@ -24,6 +24,7 @@ export interface ReviewAPIRequest {
 export interface ReviewFileResult {
   file: string;
   targetModelFamily?: string;
+  targetModelName?: string;
   factorResults: FactorEvaluationResult[];
   synthesis: SynthesisResult;
   comparison: ComparisonResult;

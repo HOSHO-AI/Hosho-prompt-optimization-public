@@ -453,6 +453,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     const comparisons = apiResponse.results.map(r => ({
         ...r.comparison,
         targetModelFamily: r.targetModelFamily,
+        targetModelName: r.targetModelName,
     }));
     // Normalize after JSON round-trip (undefined fields get stripped by JSON.stringify)
     for (const comp of comparisons) {
@@ -516,7 +517,7 @@ async function runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeo
     const result = apiResponse.results[0];
     // Write Job Summary
     core.info('Writing Job Summary...');
-    const summaryBody = (0, output_formatter_1.formatOnDemandSummary)(result.synthesis, result.factorResults, result.targetModelFamily);
+    const summaryBody = (0, output_formatter_1.formatOnDemandSummary)(result.synthesis, result.factorResults, result.targetModelFamily, result.targetModelName);
     await core.summary.addRaw(summaryBody).write();
     // Set outputs
     core.setOutput('overall_score', result.synthesis.overallScore);
@@ -706,7 +707,7 @@ function gatherFindings(insights) {
     return all;
 }
 // ---- Format building blocks ----
-function formatHeader(filename, description, targetModelFamily, prNumber) {
+function formatHeader(filename, description, targetModelFamily, targetModelName, prNumber) {
     const title = prNumber
         ? `## PR Review: #${prNumber} → ${filename}`
         : `## Prompt Review: ${filename}`;
@@ -714,7 +715,12 @@ function formatHeader(filename, description, targetModelFamily, prNumber) {
     md += `${safeDescription(description)}\n`;
     if (targetModelFamily) {
         const familyLabel = targetModelFamily.charAt(0).toUpperCase() + targetModelFamily.slice(1);
-        md += `Target model: ${familyLabel}\n`;
+        if (targetModelName) {
+            md += `Target model: ${familyLabel} (${targetModelName})\n`;
+        }
+        else {
+            md += `Target model: ${familyLabel}\n`;
+        }
     }
     md += '\n';
     return md;
@@ -787,21 +793,38 @@ function formatTopEdits(tagged, limit = 3) {
     return md;
 }
 function formatWhatChanged(insights) {
-    const bullets = [];
+    const attention = [];
+    const improved = [];
     for (const insight of insights) {
         if (!insight.changeDirection || insight.changeDirection === 'no-change')
             continue;
         if (!insight.changeDetails || insight.changeDetails.length === 0)
             continue;
         const emoji = getChangeBulletEmoji(insight.changeDirection);
+        const isAttention = insight.changeDirection === 'worse' || insight.changeDirection === 'mixed';
         for (const detail of insight.changeDetails) {
-            bullets.push(`- ${emoji} ${sanitizeInlineText(detail)}`);
+            const bullet = `- ${emoji} ${sanitizeInlineText(detail)}`;
+            if (isAttention) {
+                attention.push(bullet);
+            }
+            else {
+                improved.push(bullet);
+            }
         }
     }
-    if (bullets.length === 0)
+    if (attention.length === 0 && improved.length === 0)
         return '';
     let md = `### What changed\n\n`;
-    md += bullets.join('\n') + '\n\n';
+    if (attention.length > 0) {
+        if (improved.length > 0)
+            md += `**Needs attention:**\n`;
+        md += attention.join('\n') + '\n\n';
+    }
+    if (improved.length > 0) {
+        if (attention.length > 0)
+            md += `**Improved:**\n`;
+        md += improved.join('\n') + '\n\n';
+    }
     return md;
 }
 function formatFindingDetail(finding) {
@@ -848,9 +871,9 @@ function formatCollapsedFindings(insights, summaryLabel) {
     return md;
 }
 // ---- On-demand output ----
-function formatOnDemandSummary(synthesis, factorResults, targetModelFamily) {
+function formatOnDemandSummary(synthesis, factorResults, targetModelFamily, targetModelName) {
     const enrichedInsights = mergeFindings(synthesis.factorInsights, factorResults);
-    let md = formatHeader(synthesis.promptFile, synthesis.promptDescription, targetModelFamily);
+    let md = formatHeader(synthesis.promptFile, synthesis.promptDescription, targetModelFamily, targetModelName);
     md += formatTable(factorResults, enrichedInsights);
     // Top 3 edits
     const allFindings = gatherFindings(enrichedInsights);
@@ -865,7 +888,7 @@ function formatOnDemandSummary(synthesis, factorResults, targetModelFamily) {
 // ---- PR output ----
 function formatPRFileSection(comp, prNumber) {
     const enrichedInsights = mergeFindings(comp.synthesis.factorInsights, comp.factorResults);
-    let md = formatHeader(comp.promptFile, comp.synthesis.promptDescription, comp.targetModelFamily, prNumber);
+    let md = formatHeader(comp.promptFile, comp.synthesis.promptDescription, comp.targetModelFamily, comp.targetModelName, prNumber);
     // Verdict
     md += formatVerdict(enrichedInsights);
     // Table
