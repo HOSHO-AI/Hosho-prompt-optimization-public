@@ -850,7 +850,7 @@ function formatAllFindings(insights, tableContent) {
     const withFindings = insights.filter(f => f.findings.length > 0);
     if (withFindings.length === 0 && !tableContent)
         return '';
-    let md = `### All findings\n\n`;
+    let md = `### Detailed findings\n\n`;
     if (tableContent) {
         md += tableContent;
     }
