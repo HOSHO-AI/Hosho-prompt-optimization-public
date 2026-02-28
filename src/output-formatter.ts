@@ -117,7 +117,7 @@ function formatHeader(
     : `## Prompt Review: ${filename}`;
 
   let md = `${title}\n`;
-  md += `${safeDescription(description)}\n`;
+  md += `Agent goal: ${safeDescription(description)}\n`;
   if (targetModelFamily) {
     const familyLabel = targetModelFamily.charAt(0).toUpperCase() + targetModelFamily.slice(1);
     if (targetModelName) {
@@ -138,10 +138,10 @@ function formatTable(
 
   let md = '';
   if (isPRMode) {
-    md += `| Factor | PR Impact | Rating |\n`;
+    md += `| Factor | PR Impact | Score |\n`;
     md += `|---|---|---|`;
   } else {
-    md += `| Factor | Rating |\n`;
+    md += `| Factor | Score |\n`;
     md += `|---|---|`;
   }
 
@@ -167,9 +167,9 @@ function formatVerdict(insights: FactorInsight[]): string {
   );
 
   if (hasRegression) {
-    return '### ⛔ REJECT\n\n';
+    return '### Recommendation: ⛔ Reject PR\n\n';
   }
-  return '### ✅ APPROVE\n\n';
+  return '### Recommendation: ✅ Approve PR\n\n';
 }
 
 function formatEditLine(tagged: TaggedFinding): string {
@@ -215,7 +215,7 @@ function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
 function formatWhatChanged(changeSummary?: ChangeItem[]): string {
   if (!changeSummary || changeSummary.length === 0) return '';
 
-  let md = '### What changed\n\n';
+  let md = '### What changed in this PR\n\n';
   for (const item of changeSummary) {
     const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
     const change = sanitizeInlineText(item.change);
@@ -298,7 +298,7 @@ export function formatOnDemandSummary(
   // Top 3 edits
   const allFindings = gatherFindings(enrichedInsights);
   if (allFindings.length > 0) {
-    md += `### Top ${Math.min(3, allFindings.length)} edit${allFindings.length === 1 ? '' : 's'}\n\n`;
+    md += `### Top edits\n\n`;
     md += formatTopEdits(allFindings, 3);
   }
 
@@ -344,7 +344,7 @@ function formatPRFileSection(
   // Fix before merging (PR-caused findings only)
   const prFindings = gatherFindings(prCausedInsights);
   if (prFindings.length > 0) {
-    md += `### Fix before merging\n\n`;
+    md += `### Priority edits before merging\n\n`;
     md += formatTopEdits(prFindings, 3);
   }
 
