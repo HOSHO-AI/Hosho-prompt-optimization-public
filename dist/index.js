@@ -831,6 +831,7 @@ function formatFindingDetail(finding) {
         const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
         if (cleanedCode.trim()) {
             const codeFence = getCodeFence(cleanedCode);
+            md += `**Existing prompt:**\n\n`;
             md += `${codeFence}\n${cleanedCode}\n${codeFence}\n\n`;
         }
     }
