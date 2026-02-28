@@ -87,15 +87,20 @@ function safeDescription(description: string): string {
 
 interface TaggedFinding {
   finding: Finding;
+  factorId: string;
   factorName: string;
   factorScore: number;
+}
+
+function buildAnchorId(factorId: string, findingNumber: number): string {
+  return `${factorId}-${findingNumber}`;
 }
 
 function gatherFindings(insights: FactorInsight[]): TaggedFinding[] {
   const all: TaggedFinding[] = [];
   for (const insight of insights) {
     for (const finding of insight.findings) {
-      all.push({ finding, factorName: insight.factorName, factorScore: insight.score });
+      all.push({ finding, factorId: insight.factorId, factorName: insight.factorName, factorScore: insight.score });
     }
   }
   // Sort by score ascending (lowest = most impactful)
@@ -186,16 +191,19 @@ function formatEditLine(tagged: TaggedFinding): string {
   const reason = f.codeSnippet?.issue || f.consideration || '';
   const cleanReason = sanitizeInlineText(reason.replace(/\.+$/, ''));
 
+  let line: string;
   if (sectionRef && cleanReason) {
-    return `**${sanitizeInlineText(title)}** (${sectionRef}) — ${cleanReason}`;
+    line = `**${sanitizeInlineText(title)}** (${sectionRef}) — ${cleanReason}`;
+  } else if (cleanReason) {
+    line = `**${sanitizeInlineText(title)}** — ${cleanReason}`;
+  } else if (sectionRef) {
+    line = `**${sanitizeInlineText(title)}** (${sectionRef})`;
+  } else {
+    line = `**${sanitizeInlineText(title)}**`;
   }
-  if (cleanReason) {
-    return `**${sanitizeInlineText(title)}** — ${cleanReason}`;
-  }
-  if (sectionRef) {
-    return `**${sanitizeInlineText(title)}** (${sectionRef})`;
-  }
-  return `**${sanitizeInlineText(title)}**`;
+
+  const anchorId = buildAnchorId(tagged.factorId, f.findingNumber);
+  return `${line} → [see full edit](#${anchorId})`;
 }
 
 function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
@@ -290,6 +298,8 @@ function formatCollapsedFindings(
     md += `---\n\n`;
     md += `#### FACTOR: ${insight.factorName.toUpperCase()}\n\n`;
     for (const finding of insight.findings) {
+      const anchorId = buildAnchorId(insight.factorId, finding.findingNumber);
+      md += `<a id="${anchorId}"></a>\n`;
       md += formatFindingDetail(finding);
     }
   }
@@ -349,11 +359,22 @@ function formatPRFileSection(
   // Revert before merging (conditional — only if ❌ items with revert instructions)
   md += formatRevertSection(comp.changeSummary);
 
-  // Top 3 edits to further improve this prompt (ALL findings, whole prompt)
+  // Top 3 edits to further improve this prompt (exclude degraded factors to avoid revert overlap)
+  const degradedFactorIds = new Set(
+    enrichedInsights
+      .filter(f => f.changeDirection === 'worse' || f.changeDirection === 'mixed')
+      .map(f => f.factorId)
+  );
   const allFindings = gatherFindings(enrichedInsights);
-  if (allFindings.length > 0) {
+  let top3Candidates = allFindings.filter(f => !degradedFactorIds.has(f.factorId));
+  // Fall back to degraded findings if not enough non-degraded ones
+  if (top3Candidates.length < 3) {
+    const degradedFindings = allFindings.filter(f => degradedFactorIds.has(f.factorId));
+    top3Candidates = [...top3Candidates, ...degradedFindings].slice(0, 3);
+  }
+  if (top3Candidates.length > 0) {
     md += `### Top 3 edits to further improve this prompt\n\n`;
-    md += formatTopEdits(allFindings, 3);
+    md += formatTopEdits(top3Candidates, 3);
   }
 
   // Collapsed detail (table + ALL findings)
