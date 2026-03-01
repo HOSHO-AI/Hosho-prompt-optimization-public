@@ -335,9 +335,9 @@ describe('formatOnDemandSummary', () => {
       },
     ];
 
-    const result = formatOnDemandSummary(synthesis, factorResults, 'claude-opus-4-6');
+    const result = formatOnDemandSummary(synthesis, factorResults, 'claude-sonnet-4-6');
     expect(result).toContain('Mode: On-Demand');
-    expect(result).toContain('claude-opus-4-6');
+    expect(result).toContain('claude-sonnet-4-6');
   });
 
   it('includes prompt description', () => {
@@ -350,7 +350,7 @@ describe('formatOnDemandSummary', () => {
       factorInsights: [],
     };
 
-    const result = formatOnDemandSummary(synthesis, [], 'claude-opus-4-6');
+    const result = formatOnDemandSummary(synthesis, [], 'claude-sonnet-4-6');
     expect(result).toContain('Generates content with style and tone validation');
   });
 
@@ -383,7 +383,7 @@ describe('formatOnDemandSummary', () => {
       },
     ];
 
-    const result = formatOnDemandSummary(synthesis, factorResults, 'claude-opus-4-6');
+    const result = formatOnDemandSummary(synthesis, factorResults, 'claude-sonnet-4-6');
     expect(result).toContain('### Evaluation');
     expect(result).toContain('| **Scope** | 🟡 | Mostly clear |');
   });
@@ -429,7 +429,7 @@ describe('formatOnDemandSummary', () => {
       },
     ];
 
-    const result = formatOnDemandSummary(synthesis, factorResults, 'claude-opus-4-6');
+    const result = formatOnDemandSummary(synthesis, factorResults, 'claude-sonnet-4-6');
     expect(result).toContain('### Recommendations');
     expect(result).toContain('🔴 Major Gaps');
     expect(result).toContain('**Prompt Injection Resistance**');

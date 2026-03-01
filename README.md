@@ -123,7 +123,7 @@ Example format:
 
 ## Agent: Planner
 - Prompt: prompts/planner.md
-- Model: Claude Opus
+- Model: Claude Sonnet
 - Role: Creates project plan from requirements
 - Inputs: Requirements spec from Requirements Gatherer
 - Outputs: Project plan, fed to Builder
