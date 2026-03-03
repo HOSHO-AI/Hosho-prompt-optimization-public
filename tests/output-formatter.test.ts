@@ -162,8 +162,8 @@ describe('formatPRComment', () => {
   it('shows detailed findings section with factor headers', () => {
     const result = formatPRComment([createMockComparison()], 42);
     expect(result).toContain('### Detailed findings');
-    expect(result).toContain('#### FACTOR: PROMPT INJECTION RESISTANCE');
-    expect(result).toContain('#### FACTOR: STRUCTURE/FLOW');
+    expect(result).toContain('<strong>FACTOR: PROMPT INJECTION RESISTANCE');
+    expect(result).toContain('<strong>FACTOR: STRUCTURE/FLOW');
   });
 
   it('shows finding titles with line references', () => {
@@ -226,7 +226,7 @@ describe('formatPRComment', () => {
     const result = formatPRComment([comp], 42);
     expect(result).toContain('### Revert/rework before merging');
     expect(result).toContain('Remove rule 6.3.6');
-    expect(result).not.toContain('<details>');
+    expect(result).not.toContain('Suggested approach');
   });
 
   it('shows revertDetail with currentCode but no rewrittenCode for simple removals', () => {
@@ -450,7 +450,7 @@ describe('formatOnDemandSummary', () => {
     const result = formatOnDemandSummary(synthesis, factorResults);
     expect(result).toContain('### Top 3 edits');
     expect(result).toContain('**No input delimiters**');
-    expect(result).toContain('#### FACTOR: PROMPT INJECTION RESISTANCE');
+    expect(result).toContain('<strong>FACTOR: PROMPT INJECTION RESISTANCE');
     expect(result).toContain('1. No input delimiters');
   });
 });

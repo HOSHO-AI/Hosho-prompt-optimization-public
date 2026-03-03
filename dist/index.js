@@ -867,13 +867,13 @@ function formatAllFindings(insights, tableContent) {
         md += tableContent;
     }
     for (const insight of withFindings) {
-        md += `---\n\n`;
-        md += `#### FACTOR: ${insight.factorName.toUpperCase()}\n\n`;
+        md += `<details>\n<summary><strong>FACTOR: ${insight.factorName.toUpperCase()}</strong></summary>\n\n`;
         for (const finding of insight.findings) {
             const anchorId = buildAnchorId(insight.factorId, finding.findingNumber);
             md += `<a id="${anchorId}"></a>\n`;
             md += formatFindingDetail(finding);
         }
+        md += `</details>\n\n`;
     }
     return md;
 }
