@@ -212,7 +212,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### What\'s good ✅ and bad ❌ in this PR');
+    expect(result).toContain('### What\'s good and bad in this PR');
     expect(result).toContain('✅ XML tags on 5 variables');
     expect(result).toContain('❌ Removed §4 rules');
   });

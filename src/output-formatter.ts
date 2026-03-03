@@ -225,7 +225,7 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
     (a, b) => (effectOrder[a.effect] ?? 1) - (effectOrder[b.effect] ?? 1)
   );
 
-  let md = '### What\'s good ✅ and bad ❌ in this PR\n\n';
+  let md = '### What\'s good and bad in this PR\n\n';
   for (const item of sorted) {
     const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
     const change = sanitizeInlineText(item.change);
