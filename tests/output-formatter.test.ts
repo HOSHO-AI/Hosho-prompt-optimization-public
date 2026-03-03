@@ -154,7 +154,7 @@ describe('formatPRComment', () => {
 
   it('shows top 3 edits section with anchor links', () => {
     const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('### Top 3 edits to further improve this prompt');
+    expect(result).toContain('### Top 3 edits to further improve (beyond this PR)');
     expect(result).toContain('**User inputs lack delimiters**');
     expect(result).toContain('[see full edit](#injection-1)');
   });
@@ -212,7 +212,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### What changed in this PR');
+    expect(result).toContain('### What\'s good ✅ and bad ❌ in this PR');
     expect(result).toContain('✅ XML tags on 5 variables');
     expect(result).toContain('❌ Removed §4 rules');
   });
@@ -224,7 +224,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### Revert before merging');
+    expect(result).toContain('### What to consider reverting before merging');
     expect(result).toContain('Restore §4 preservation constraints');
   });
 

@@ -225,7 +225,7 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
     (a, b) => (effectOrder[a.effect] ?? 1) - (effectOrder[b.effect] ?? 1)
   );
 
-  let md = '### What changed in this PR\n\n';
+  let md = '### What\'s good ✅ and bad ❌ in this PR\n\n';
   for (const item of sorted) {
     const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
     const change = sanitizeInlineText(item.change);
@@ -241,7 +241,7 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
   const reverts = changeSummary.filter(c => c.effect === 'negative' && c.revert);
   if (reverts.length === 0) return '';
 
-  let md = '### Revert before merging\n\n';
+  let md = '### What to consider reverting before merging\n\n';
   for (const item of reverts) {
     md += `- ${sanitizeInlineText(item.revert!)}\n`;
   }
@@ -372,7 +372,7 @@ function formatPRFileSection(
     top3Candidates = [...top3Candidates, ...degradedFindings].slice(0, 3);
   }
   if (top3Candidates.length > 0) {
-    md += `### Top 3 edits to further improve this prompt\n\n`;
+    md += `### Top 3 edits to further improve (beyond this PR)\n\n`;
     md += formatTopEdits(top3Candidates, 3);
   }
 
