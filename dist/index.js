@@ -493,11 +493,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     core.info('Posting PR review comment...');
     const commentBody = (0, output_formatter_1.formatPRComment)(comparisons, pullNumber);
     await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
-    // Step 6: Post review verdict
-    const anyCritical = comparisons.some((c) => c.hasCriticalIssue);
-    const anyRegression = comparisons.some((c) => c.synthesis.factorInsights.some(f => f.changeDirection === 'worse' || f.changeDirection === 'mixed'));
-    await postReviewVerdict(octokit, owner, repo, pullNumber, headSha, anyCritical || anyRegression);
-    // Step 7: Write Job Summary
+    // Step 6: Write Job Summary
     core.info('Writing Job Summary...');
     const summaryBody = (0, output_formatter_1.formatJobSummary)(comparisons, pullNumber);
     await core.summary.addRaw(summaryBody).write();
@@ -586,26 +582,6 @@ async function postOrUpdatePRComment(octokit, owner, repo, pullNumber, body) {
     else {
         await octokit.rest.issues.createComment({ owner, repo, issue_number: pullNumber, body });
         core.info('Created new PR comment');
-    }
-}
-async function postReviewVerdict(octokit, owner, repo, pullNumber, commitSha, hasCriticalIssues) {
-    try {
-        const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-        const event = hasCriticalIssues ? 'REQUEST_CHANGES' : 'COMMENT';
-        const body = hasCriticalIssues
-            ? 'Hosho Bot found critical issues. See the review comment above for details.'
-            : 'Hosho Bot review complete. See the review comment above for details.';
-        await octokit.rest.pulls.createReview({
-            owner, repo, pull_number: pullNumber,
-            commit_id: pr.head.sha,
-            event: event,
-            body,
-        });
-        core.info(`Posted review verdict: ${event}`);
-    }
-    catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        core.warning(`Failed to post review verdict: ${message}`);
     }
 }
 // Run

@@ -185,16 +185,7 @@ async function runPRMode(
   const commentBody = formatPRComment(comparisons, pullNumber);
   await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
 
-  // Step 6: Post review verdict
-  const anyCritical = comparisons.some((c) => c.hasCriticalIssue);
-  const anyRegression = comparisons.some((c) =>
-    c.synthesis.factorInsights.some(f =>
-      f.changeDirection === 'worse' || f.changeDirection === 'mixed'
-    )
-  );
-  await postReviewVerdict(octokit, owner, repo, pullNumber, headSha, anyCritical || anyRegression);
-
-  // Step 7: Write Job Summary
+  // Step 6: Write Job Summary
   core.info('Writing Job Summary...');
   const summaryBody = formatJobSummary(comparisons, pullNumber);
   await core.summary.addRaw(summaryBody).write();
@@ -319,36 +310,6 @@ async function postOrUpdatePRComment(
   } else {
     await octokit.rest.issues.createComment({ owner, repo, issue_number: pullNumber, body });
     core.info('Created new PR comment');
-  }
-}
-
-async function postReviewVerdict(
-  octokit: ReturnType<typeof github.getOctokit>,
-  owner: string,
-  repo: string,
-  pullNumber: number,
-  commitSha: string,
-  hasCriticalIssues: boolean
-): Promise<void> {
-  try {
-    const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-
-    const event = hasCriticalIssues ? 'REQUEST_CHANGES' : 'COMMENT';
-    const body = hasCriticalIssues
-      ? 'Hosho Bot found critical issues. See the review comment above for details.'
-      : 'Hosho Bot review complete. See the review comment above for details.';
-
-    await octokit.rest.pulls.createReview({
-      owner, repo, pull_number: pullNumber,
-      commit_id: pr.head.sha,
-      event: event as 'REQUEST_CHANGES' | 'COMMENT',
-      body,
-    });
-
-    core.info(`Posted review verdict: ${event}`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    core.warning(`Failed to post review verdict: ${message}`);
   }
 }
 
