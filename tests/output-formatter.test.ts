@@ -162,8 +162,8 @@ describe('formatPRComment', () => {
   it('shows detailed findings section with factor headers', () => {
     const result = formatPRComment([createMockComparison()], 42);
     expect(result).toContain('### Detailed findings');
-    expect(result).toContain('<strong>FACTOR: PROMPT INJECTION RESISTANCE');
-    expect(result).toContain('<strong>FACTOR: STRUCTURE/FLOW');
+    expect(result).toContain('#### FACTOR: PROMPT INJECTION RESISTANCE');
+    expect(result).toContain('#### FACTOR: STRUCTURE/FLOW');
   });
 
   it('shows finding titles with line references', () => {
@@ -248,7 +248,8 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('<details><summary>Suggested approach (line 174)</summary>');
+    expect(result).toContain('<details><summary><strong>1.</strong> Remove rule 6.3.6');
+    expect(result).toContain('<em>(line 174)</em>');
     expect(result).toContain('**Current prompt:**');
     expect(result).toContain('Copy should be comprehensive');
     expect(result).toContain('**Suggested fix:** Delete rule 6.3.6');
@@ -275,8 +276,8 @@ describe('formatPRComment', () => {
     });
     const result = formatPRComment([comp], 42);
     expect(result).toContain('### Revert/rework before merging');
-    expect(result).toContain('Restore §4 preservation constraints');
-    expect(result).toContain('<details><summary>Suggested approach (line 100-106)</summary>');
+    expect(result).toContain('<details><summary><strong>1.</strong> Restore §4 preservation constraints');
+    expect(result).toContain('<em>(line 100-106)</em>');
     expect(result).toContain('**Current prompt:**');
     expect(result).toContain('### Pre-submission checklist:');
     expect(result).toContain('**Suggested fix:** Re-add the three preservation rules');
@@ -450,7 +451,7 @@ describe('formatOnDemandSummary', () => {
     const result = formatOnDemandSummary(synthesis, factorResults);
     expect(result).toContain('### Top 3 edits');
     expect(result).toContain('**No input delimiters**');
-    expect(result).toContain('<strong>FACTOR: PROMPT INJECTION RESISTANCE');
+    expect(result).toContain('#### FACTOR: PROMPT INJECTION RESISTANCE');
     expect(result).toContain('1. No input delimiters');
   });
 });
