@@ -217,15 +217,44 @@ describe('formatPRComment', () => {
     expect(result).toContain('❌ Removed §4 rules');
   });
 
-  it('shows revert section for negative changes', () => {
+  it('shows revert section for negative changes (simple, no detail)', () => {
     const comp = createMockComparison({
       changeSummary: [
-        { change: 'Removed §4 rules', impact: 'lost constraints', effect: 'negative', revert: 'Restore §4 preservation constraints' },
+        { change: 'Removed §4 rules', impact: 'lost constraints', effect: 'negative', revert: 'Remove rule 6.3.6 — conflicts with §6.7' },
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### What to consider reverting before merging');
+    expect(result).toContain('### Revert/rework before merging');
+    expect(result).toContain('Remove rule 6.3.6');
+    expect(result).not.toContain('<details>');
+  });
+
+  it('shows collapsible revertDetail for structural regressions', () => {
+    const comp = createMockComparison({
+      changeSummary: [
+        {
+          change: 'Removed §4 (3 rules)',
+          impact: 'no replacement',
+          effect: 'negative',
+          revert: 'Restore §4 preservation constraints — three rules lost',
+          revertDetail: {
+            currentCode: '### Pre-submission checklist:\n1. Verify assets',
+            startLine: 100,
+            endLine: 106,
+            suggestedFix: 'Re-add the three preservation rules as a standalone section before the checklist.',
+            rewrittenCode: '## 4) Preservation rules\n\n1. Keep all fields.\n2. Only add elements.\n3. Maintain order.\n\n### Pre-submission checklist:\n1. Verify assets',
+          },
+        },
+      ],
+    });
+    const result = formatPRComment([comp], 42);
+    expect(result).toContain('### Revert/rework before merging');
     expect(result).toContain('Restore §4 preservation constraints');
+    expect(result).toContain('<details><summary>Suggested approach (line 100-106)</summary>');
+    expect(result).toContain('**Current prompt:**');
+    expect(result).toContain('### Pre-submission checklist:');
+    expect(result).toContain('**Suggested fix:** Re-add the three preservation rules');
+    expect(result).toContain('## 4) Preservation rules');
   });
 
   it('does not show top edits section when no findings exist', () => {

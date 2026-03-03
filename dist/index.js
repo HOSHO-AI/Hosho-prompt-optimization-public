@@ -809,9 +809,25 @@ function formatRevertSection(changeSummary) {
     const reverts = changeSummary.filter(c => c.effect === 'negative' && c.revert);
     if (reverts.length === 0)
         return '';
-    let md = '### What to consider reverting before merging\n\n';
+    let md = '### Revert/rework before merging\n\n';
     for (const item of reverts) {
         md += `- ${sanitizeInlineText(item.revert)}\n`;
+        if (item.revertDetail) {
+            const d = item.revertDetail;
+            const lineRef = d.startLine === d.endLine ? `${d.startLine}` : `${d.startLine}-${d.endLine}`;
+            md += `  <details><summary>Suggested approach (line ${lineRef})</summary>\n\n`;
+            if (d.currentCode.trim()) {
+                const codeFence = getCodeFence(d.currentCode);
+                md += `  **Current prompt:**\n\n`;
+                md += `  ${codeFence}\n${d.currentCode}\n${codeFence}\n\n`;
+            }
+            md += `  **Suggested fix:** ${sanitizeInlineText(d.suggestedFix)}\n\n`;
+            if (d.rewrittenCode.trim()) {
+                const rewriteFence = getCodeFence(d.rewrittenCode);
+                md += `  ${rewriteFence}\n${d.rewrittenCode}\n${rewriteFence}\n\n`;
+            }
+            md += `  </details>\n\n`;
+        }
     }
     md += '\n';
     return md;

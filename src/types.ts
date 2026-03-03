@@ -91,6 +91,13 @@ export interface ChangeItem {
   impact: string;
   effect: 'positive' | 'negative' | 'mixed';
   revert?: string;
+  revertDetail?: {
+    currentCode: string;
+    startLine: number;
+    endLine: number;
+    suggestedFix: string;
+    rewrittenCode: string;
+  };
 }
 
 // ---- Comparison Types ----
