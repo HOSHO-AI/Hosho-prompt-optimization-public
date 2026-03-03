@@ -360,6 +360,7 @@ async function run() {
         const promptPath = core.getInput('prompt_path');
         const systemOverviewPath = core.getInput('system_overview');
         const timeoutMs = parseInt(core.getInput('timeout') || '180', 10) * 1000;
+        const prNumberInput = core.getInput('pr_number');
         // Mask the API key in logs
         core.setSecret(apiKey);
         // Read system overview file if provided
@@ -376,7 +377,7 @@ async function run() {
         }
         // Determine mode
         const eventName = github.context.eventName;
-        const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target';
+        const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target' || !!prNumberInput;
         core.info(`Mode: ${isPRMode ? 'Pull Request' : 'On-Demand'}`);
         if (isPRMode) {
             if (!filePattern && !promptPath) {
@@ -384,7 +385,7 @@ async function run() {
                     'Use file_pattern for glob matching (e.g. "**/*system-prompt*.md") ' +
                     'or prompt_path for directory prefix matching (e.g. "prompts/").');
             }
-            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs);
+            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput);
         }
         else {
             await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
@@ -396,21 +397,40 @@ async function run() {
     }
 }
 // ---- PR Mode ----
-async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs) {
+async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
         throw new Error('GITHUB_TOKEN environment variable is required for PR mode');
     }
     const octokit = github.getOctokit(token);
     const { owner, repo } = github.context.repo;
-    const pr = github.context.payload.pull_request;
-    if (!pr) {
-        throw new Error('No pull request found in event payload');
+    let pullNumber;
+    let baseSha;
+    let headSha;
+    if (prNumberInput) {
+        // Slash command path — PR data not in payload, fetch via API
+        pullNumber = parseInt(prNumberInput, 10);
+        if (isNaN(pullNumber)) {
+            throw new Error(`Invalid pr_number input: "${prNumberInput}"`);
+        }
+        const { data: prData } = await octokit.rest.pulls.get({
+            owner, repo, pull_number: pullNumber,
+        });
+        baseSha = prData.base.sha;
+        headSha = prData.head.sha;
+        core.info(`Slash command: fetched PR #${pullNumber} — base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
     }
-    const pullNumber = pr.number;
-    const baseSha = pr.base.sha;
-    const headSha = pr.head.sha;
-    core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
+    else {
+        // Normal pull_request event — SHAs in payload
+        const pr = github.context.payload.pull_request;
+        if (!pr) {
+            throw new Error('No pull request found in event payload');
+        }
+        pullNumber = pr.number;
+        baseSha = pr.base.sha;
+        headSha = pr.head.sha;
+        core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
+    }
     // Step 1: Identify changed prompt files
     const changedFiles = await (0, file_identifier_1.identifyChangedPromptFiles)(octokit, owner, repo, pullNumber, filePattern ? { filePattern } : { promptPath });
     if (changedFiles.length === 0) {
@@ -797,7 +817,7 @@ function formatWhatChanged(changeSummary) {
         return '';
     const effectOrder = { negative: 0, mixed: 1, positive: 2 };
     const sorted = [...changeSummary].sort((a, b) => (effectOrder[a.effect] ?? 1) - (effectOrder[b.effect] ?? 1));
-    let md = '### What changed in this PR\n\n';
+    let md = '### What\'s good ✅ and bad ❌ in this PR\n\n';
     for (const item of sorted) {
         const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
         const change = sanitizeInlineText(item.change);
@@ -813,7 +833,7 @@ function formatRevertSection(changeSummary) {
     const reverts = changeSummary.filter(c => c.effect === 'negative' && c.revert);
     if (reverts.length === 0)
         return '';
-    let md = '### Revert before merging\n\n';
+    let md = '### What to consider reverting before merging\n\n';
     for (const item of reverts) {
         md += `- ${sanitizeInlineText(item.revert)}\n`;
     }
@@ -902,7 +922,7 @@ function formatPRFileSection(comp, prNumber) {
         top3Candidates = [...top3Candidates, ...degradedFindings].slice(0, 3);
     }
     if (top3Candidates.length > 0) {
-        md += `### Top 3 edits to further improve this prompt\n\n`;
+        md += `### Top 3 edits to further improve (beyond this PR)\n\n`;
         md += formatTopEdits(top3Candidates, 3);
     }
     // Collapsed detail (table + ALL findings)

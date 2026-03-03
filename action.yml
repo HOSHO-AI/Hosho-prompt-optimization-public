@@ -34,6 +34,10 @@ inputs:
     description: 'API call timeout in seconds'
     required: false
     default: '600'
+  pr_number:
+    description: 'PR number (required when triggered via issue_comment slash command)'
+    required: false
+    default: ''
 
 outputs:
   overall_score:

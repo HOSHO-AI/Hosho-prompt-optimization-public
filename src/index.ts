@@ -23,6 +23,7 @@ async function run(): Promise<void> {
     const promptPath = core.getInput('prompt_path');
     const systemOverviewPath = core.getInput('system_overview');
     const timeoutMs = parseInt(core.getInput('timeout') || '180', 10) * 1000;
+    const prNumberInput = core.getInput('pr_number');
 
     // Mask the API key in logs
     core.setSecret(apiKey);
@@ -41,7 +42,7 @@ async function run(): Promise<void> {
 
     // Determine mode
     const eventName = github.context.eventName;
-    const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target';
+    const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target' || !!prNumberInput;
 
     core.info(`Mode: ${isPRMode ? 'Pull Request' : 'On-Demand'}`);
 
@@ -53,7 +54,7 @@ async function run(): Promise<void> {
           'or prompt_path for directory prefix matching (e.g. "prompts/").'
         );
       }
-      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs);
+      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput);
     } else {
       await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
     }
@@ -71,7 +72,8 @@ async function runPRMode(
   filePattern: string,
   promptPath: string,
   systemOverview: string,
-  timeoutMs: number
+  timeoutMs: number,
+  prNumberInput?: string
 ): Promise<void> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -80,17 +82,34 @@ async function runPRMode(
 
   const octokit = github.getOctokit(token);
   const { owner, repo } = github.context.repo;
-  const pr = github.context.payload.pull_request;
 
-  if (!pr) {
-    throw new Error('No pull request found in event payload');
+  let pullNumber: number;
+  let baseSha: string;
+  let headSha: string;
+
+  if (prNumberInput) {
+    // Slash command path — PR data not in payload, fetch via API
+    pullNumber = parseInt(prNumberInput, 10);
+    if (isNaN(pullNumber)) {
+      throw new Error(`Invalid pr_number input: "${prNumberInput}"`);
+    }
+    const { data: prData } = await octokit.rest.pulls.get({
+      owner, repo, pull_number: pullNumber,
+    });
+    baseSha = prData.base.sha;
+    headSha = prData.head.sha;
+    core.info(`Slash command: fetched PR #${pullNumber} — base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
+  } else {
+    // Normal pull_request event — SHAs in payload
+    const pr = github.context.payload.pull_request;
+    if (!pr) {
+      throw new Error('No pull request found in event payload');
+    }
+    pullNumber = pr.number;
+    baseSha = pr.base.sha;
+    headSha = pr.head.sha;
+    core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
   }
-
-  const pullNumber = pr.number;
-  const baseSha = pr.base.sha;
-  const headSha = pr.head.sha;
-
-  core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
 
   // Step 1: Identify changed prompt files
   const changedFiles = await identifyChangedPromptFiles(
