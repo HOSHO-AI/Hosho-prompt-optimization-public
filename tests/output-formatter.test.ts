@@ -217,7 +217,7 @@ describe('formatPRComment', () => {
     expect(result).toContain('❌ Removed §4 rules');
   });
 
-  it('shows revert section for negative changes (simple, no detail)', () => {
+  it('shows revert section without details when no revertDetail provided', () => {
     const comp = createMockComparison({
       changeSummary: [
         { change: 'Removed §4 rules', impact: 'lost constraints', effect: 'negative', revert: 'Remove rule 6.3.6 — conflicts with §6.7' },
@@ -227,6 +227,32 @@ describe('formatPRComment', () => {
     expect(result).toContain('### Revert/rework before merging');
     expect(result).toContain('Remove rule 6.3.6');
     expect(result).not.toContain('<details>');
+  });
+
+  it('shows revertDetail with currentCode but no rewrittenCode for simple removals', () => {
+    const comp = createMockComparison({
+      changeSummary: [
+        {
+          change: 'Added conflicting rule 6.3.6',
+          impact: 'contradicts §6.7',
+          effect: 'negative',
+          revert: 'Remove rule 6.3.6 — conflicts with §6.7 brevity principles',
+          revertDetail: {
+            currentCode: '6. Copy should be comprehensive and detailed, covering all aspects thoroughly.',
+            startLine: 174,
+            endLine: 174,
+            suggestedFix: 'Delete rule 6.3.6 — it directly contradicts the existing brevity-first principles in §6.7.',
+            rewrittenCode: '',
+          },
+        },
+      ],
+    });
+    const result = formatPRComment([comp], 42);
+    expect(result).toContain('<details><summary>Suggested approach (line 174)</summary>');
+    expect(result).toContain('**Current prompt:**');
+    expect(result).toContain('Copy should be comprehensive');
+    expect(result).toContain('**Suggested fix:** Delete rule 6.3.6');
+    expect(result).not.toContain('## 4)');
   });
 
   it('shows collapsible revertDetail for structural regressions', () => {
