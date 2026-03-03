@@ -242,26 +242,25 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
   if (reverts.length === 0) return '';
 
   let md = '### Revert/rework before merging\n\n';
-  for (const item of reverts) {
-    md += `- ${sanitizeInlineText(item.revert!)}\n`;
+  for (let i = 0; i < reverts.length; i++) {
+    const item = reverts[i];
+    md += `**${i + 1}.** ${sanitizeInlineText(item.revert!)}\n\n`;
     if (item.revertDetail) {
       const d = item.revertDetail;
       const lineRef = d.startLine === d.endLine ? `${d.startLine}` : `${d.startLine}-${d.endLine}`;
-      md += `  <details><summary>Suggested approach (line ${lineRef})</summary>\n\n`;
+      md += `<details><summary>Suggested approach (line ${lineRef})</summary>\n\n`;
       if (d.currentCode.trim()) {
         const codeFence = getCodeFence(d.currentCode);
-        md += `  **Current prompt:**\n\n`;
-        md += `  ${codeFence}\n${d.currentCode}\n${codeFence}\n\n`;
+        md += `**Current prompt:**\n\n${codeFence}\n${d.currentCode}\n${codeFence}\n\n`;
       }
-      md += `  **Suggested fix:** ${sanitizeInlineText(d.suggestedFix)}\n\n`;
+      md += `**Suggested fix:** ${sanitizeInlineText(d.suggestedFix)}\n\n`;
       if (d.rewrittenCode.trim()) {
         const rewriteFence = getCodeFence(d.rewrittenCode);
-        md += `  ${rewriteFence}\n${d.rewrittenCode}\n${rewriteFence}\n\n`;
+        md += `${rewriteFence}\n${d.rewrittenCode}\n${rewriteFence}\n\n`;
       }
-      md += `  </details>\n\n`;
+      md += `</details>\n\n`;
     }
   }
-  md += '\n';
   return md;
 }
 
