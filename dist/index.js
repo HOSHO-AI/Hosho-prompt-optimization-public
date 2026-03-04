@@ -863,7 +863,7 @@ function formatAllFindings(insights, tableContent) {
     const withFindings = insights.filter(f => f.findings.length > 0);
     if (withFindings.length === 0 && !tableContent)
         return '';
-    let md = `### Detailed findings\n\n`;
+    let md = `---\n### APPENDIX: FURTHER PROMPT IMPROVEMENTS\n\n`;
     if (tableContent) {
         md += tableContent;
     }

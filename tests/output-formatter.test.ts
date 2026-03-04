@@ -161,7 +161,7 @@ describe('formatPRComment', () => {
 
   it('shows detailed findings section with factor headers', () => {
     const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('### Detailed findings');
+    expect(result).toContain('### APPENDIX: FURTHER PROMPT IMPROVEMENTS');
     expect(result).toContain('#### FACTOR: PROMPT INJECTION RESISTANCE');
     expect(result).toContain('#### FACTOR: STRUCTURE/FLOW');
   });
