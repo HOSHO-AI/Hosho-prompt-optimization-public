@@ -203,7 +203,7 @@ function formatEditLine(tagged: TaggedFinding): string {
   }
 
   const anchorId = buildAnchorId(tagged.factorId, f.findingNumber);
-  return `${line} → [see full edit](#${anchorId})`;
+  return `${line} [[LINK]](#${anchorId})`;
 }
 
 function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {

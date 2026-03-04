@@ -776,7 +776,7 @@ function formatEditLine(tagged) {
         line = `**${sanitizeInlineText(title)}**`;
     }
     const anchorId = buildAnchorId(tagged.factorId, f.findingNumber);
-    return `${line} → [see full edit](#${anchorId})`;
+    return `${line} [[LINK]](#${anchorId})`;
 }
 function formatTopEdits(tagged, limit = 3) {
     if (tagged.length === 0)

@@ -156,7 +156,7 @@ describe('formatPRComment', () => {
     const result = formatPRComment([createMockComparison()], 42);
     expect(result).toContain('### Top 3 edits to further improve (beyond this PR)');
     expect(result).toContain('**User inputs lack delimiters**');
-    expect(result).toContain('[see full edit](#injection-1)');
+    expect(result).toContain('[[LINK]](#injection-1)');
   });
 
   it('shows detailed findings section with factor headers', () => {
