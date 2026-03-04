@@ -92,10 +92,6 @@ interface TaggedFinding {
   factorScore: number;
 }
 
-function buildAnchorId(factorId: string, findingNumber: number): string {
-  return `${factorId}-${findingNumber}`;
-}
-
 function gatherFindings(insights: FactorInsight[]): TaggedFinding[] {
   const all: TaggedFinding[] = [];
   for (const insight of insights) {
@@ -202,8 +198,7 @@ function formatEditLine(tagged: TaggedFinding): string {
     line = `**${sanitizeInlineText(title)}**`;
   }
 
-  const anchorId = buildAnchorId(tagged.factorId, f.findingNumber);
-  return `${line} [[LINK]](#${anchorId})`;
+  return `${line} — See ${tagged.factorName} [${f.findingNumber}]`;
 }
 
 function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
@@ -311,12 +306,11 @@ function formatAllFindings(
   }
 
   for (const insight of withFindings) {
-    md += `---\n#### FACTOR: ${insight.factorName.toUpperCase()}\n`;
+    md += `---\n<details><summary><strong>FACTOR: ${insight.factorName.toUpperCase()}</strong></summary>\n\n`;
     for (const finding of insight.findings) {
-      const anchorId = buildAnchorId(insight.factorId, finding.findingNumber);
-      md += `<a id="${anchorId}"></a>\n`;
       md += formatFindingDetail(finding);
     }
+    md += `</details>\n\n`;
   }
 
   return md;

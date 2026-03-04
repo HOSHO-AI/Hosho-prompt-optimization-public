@@ -702,9 +702,6 @@ function safeDescription(description) {
         .replace(/\n/g, ' ')
         .trim();
 }
-function buildAnchorId(factorId, findingNumber) {
-    return `${factorId}-${findingNumber}`;
-}
 function gatherFindings(insights) {
     const all = [];
     for (const insight of insights) {
@@ -794,8 +791,7 @@ function formatEditLine(tagged) {
     else {
         line = `**${sanitizeInlineText(title)}**`;
     }
-    const anchorId = buildAnchorId(tagged.factorId, f.findingNumber);
-    return `${line} [[LINK]](#${anchorId})`;
+    return `${line} — See ${tagged.factorName} [${f.findingNumber}]`;
 }
 function formatTopEdits(tagged, limit = 3) {
     if (tagged.length === 0)
@@ -887,12 +883,11 @@ function formatAllFindings(insights, tableContent) {
         md += tableContent;
     }
     for (const insight of withFindings) {
-        md += `---\n#### FACTOR: ${insight.factorName.toUpperCase()}\n`;
+        md += `---\n<details><summary><strong>FACTOR: ${insight.factorName.toUpperCase()}</strong></summary>\n\n`;
         for (const finding of insight.findings) {
-            const anchorId = buildAnchorId(insight.factorId, finding.findingNumber);
-            md += `<a id="${anchorId}"></a>\n`;
             md += formatFindingDetail(finding);
         }
+        md += `</details>\n\n`;
     }
     return md;
 }

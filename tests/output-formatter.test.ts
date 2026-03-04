@@ -152,18 +152,20 @@ describe('formatPRComment', () => {
     expect(result).toContain('🔴'); // Score 2 (1-4)
   });
 
-  it('shows top 3 edits section with anchor links', () => {
+  it('shows top 3 edits section with factor references', () => {
     const result = formatPRComment([createMockComparison()], 42);
     expect(result).toContain('### Top 3 edits to further improve (beyond this PR)');
     expect(result).toContain('**User inputs lack delimiters**');
-    expect(result).toContain('[[LINK]](#injection-1)');
+    expect(result).toContain('See Prompt Injection Resistance [1]');
   });
 
-  it('shows detailed findings section with factor headers', () => {
+  it('shows detailed findings section with collapsible factor headers', () => {
     const result = formatPRComment([createMockComparison()], 42);
     expect(result).toContain('### APPENDIX: FURTHER PROMPT IMPROVEMENTS');
-    expect(result).toContain('#### FACTOR: PROMPT INJECTION RESISTANCE');
-    expect(result).toContain('#### FACTOR: STRUCTURE/FLOW');
+    expect(result).toContain('<strong>FACTOR: PROMPT INJECTION RESISTANCE</strong>');
+    expect(result).toContain('<strong>FACTOR: STRUCTURE/FLOW</strong>');
+    expect(result).toContain('<details><summary>');
+    expect(result).toContain('</details>');
   });
 
   it('shows finding titles with line references', () => {
@@ -451,7 +453,7 @@ describe('formatOnDemandSummary', () => {
     const result = formatOnDemandSummary(synthesis, factorResults);
     expect(result).toContain('### Top 3 edits');
     expect(result).toContain('**No input delimiters**');
-    expect(result).toContain('#### FACTOR: PROMPT INJECTION RESISTANCE');
+    expect(result).toContain('<strong>FACTOR: PROMPT INJECTION RESISTANCE</strong>');
     expect(result).toContain('1. No input delimiters');
   });
 });
