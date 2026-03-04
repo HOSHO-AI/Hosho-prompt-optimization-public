@@ -695,13 +695,6 @@ function mergeFindings(factorInsights, factorResults) {
         return insight;
     });
 }
-function safeDescription(description) {
-    return description
-        .replace(/```[\s\S]*?```/g, '')
-        .replace(/`{3,}/g, '')
-        .replace(/\n/g, ' ')
-        .trim();
-}
 function gatherFindings(insights) {
     const all = [];
     for (const insight of insights) {
@@ -714,22 +707,11 @@ function gatherFindings(insights) {
     return all;
 }
 // ---- Format building blocks ----
-function formatHeader(filename, description, targetModelFamily, targetModelName, prNumber) {
+function formatHeader(filename, _description, _targetModelFamily, _targetModelName, prNumber) {
     const title = prNumber
         ? `## PR Review: #${prNumber} → ${filename}`
         : `## Prompt Review: ${filename}`;
-    let md = `${title}\n`;
-    md += `Agent goal: ${safeDescription(description)}\n`;
-    if (targetModelFamily) {
-        const familyLabel = targetModelFamily.charAt(0).toUpperCase() + targetModelFamily.slice(1);
-        if (targetModelName) {
-            md += `Target model: ${familyLabel} (${targetModelName})\n`;
-        }
-        else {
-            md += `Target model: ${familyLabel}\n`;
-        }
-    }
-    md += '\n';
+    let md = `${title}\n\n`;
     return md;
 }
 function formatTable(factorResults, insights) {
@@ -883,12 +865,13 @@ function formatAllFindings(insights, tableContent) {
         md += tableContent;
     }
     for (const insight of withFindings) {
-        md += `---\n<details><summary><strong>FACTOR: ${insight.factorName.toUpperCase()}</strong></summary>\n\n`;
+        md += `<details><summary><strong>${insight.factorName}</strong></summary>\n\n`;
         for (const finding of insight.findings) {
             md += formatFindingDetail(finding);
         }
-        md += `</details>\n\n`;
+        md += `</details>\n`;
     }
+    md += `\n`;
     return md;
 }
 // ---- On-demand output ----

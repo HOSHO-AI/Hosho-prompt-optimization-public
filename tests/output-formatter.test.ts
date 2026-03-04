@@ -132,9 +132,10 @@ describe('formatPRComment', () => {
     expect(result).toContain('## PR Review: #42 → prompts/test-prompt.md');
   });
 
-  it('includes prompt description as agent goal', () => {
+  it('does not include agent goal or target model in header', () => {
     const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('Agent goal: Generates test content with validation and error handling');
+    expect(result).not.toContain('Agent goal:');
+    expect(result).not.toContain('Target model:');
   });
 
   it('shows factor table with traffic light emojis', () => {
@@ -162,8 +163,8 @@ describe('formatPRComment', () => {
   it('shows detailed findings section with collapsible factor headers', () => {
     const result = formatPRComment([createMockComparison()], 42);
     expect(result).toContain('### APPENDIX: FURTHER PROMPT IMPROVEMENTS');
-    expect(result).toContain('<strong>FACTOR: PROMPT INJECTION RESISTANCE</strong>');
-    expect(result).toContain('<strong>FACTOR: STRUCTURE/FLOW</strong>');
+    expect(result).toContain('<strong>Prompt Injection Resistance</strong>');
+    expect(result).toContain('<strong>Structure/Flow</strong>');
     expect(result).toContain('<details><summary>');
     expect(result).toContain('</details>');
   });
@@ -358,7 +359,7 @@ describe('formatOnDemandSummary', () => {
 
     const result = formatOnDemandSummary(synthesis, factorResults, 'claude');
     expect(result).toContain('## Prompt Review: prompts/test.md');
-    expect(result).toContain('Target model: Claude');
+    expect(result).not.toContain('Target model:');
   });
 
   it('includes prompt description as agent goal', () => {
@@ -372,7 +373,7 @@ describe('formatOnDemandSummary', () => {
     };
 
     const result = formatOnDemandSummary(synthesis, []);
-    expect(result).toContain('Agent goal: Generates content with style and tone validation');
+    expect(result).not.toContain('Agent goal:');
   });
 
   it('includes evaluation table', () => {
@@ -453,7 +454,7 @@ describe('formatOnDemandSummary', () => {
     const result = formatOnDemandSummary(synthesis, factorResults);
     expect(result).toContain('### Top 3 edits');
     expect(result).toContain('**No input delimiters**');
-    expect(result).toContain('<strong>FACTOR: PROMPT INJECTION RESISTANCE</strong>');
+    expect(result).toContain('<strong>Prompt Injection Resistance</strong>');
     expect(result).toContain('1. No input delimiters');
   });
 });
