@@ -157,7 +157,7 @@ describe('formatPRComment', () => {
     const result = formatPRComment([createMockComparison()], 42);
     expect(result).toContain('### TOP 3 EDITS TO FURTHER IMPROVE (BEYOND THIS PR)');
     expect(result).toContain('**User inputs lack delimiters**');
-    expect(result).toContain('See Prompt Injection Resistance #1');
+    expect(result).toContain('See Prompt Injection Resistance (1)');
   });
 
   it('shows detailed findings section with collapsible factor headers', () => {
@@ -217,7 +217,7 @@ describe('formatPRComment', () => {
     const result = formatPRComment([comp], 42);
     expect(result).toContain('### WHAT\'S GOOD AND BAD IN THIS PR');
     expect(result).toContain('✅ XML tags on 5 variables');
-    expect(result).toContain('❌ Removed §4 rules');
+    expect(result).toContain('⚠️ Removed §4 rules');
   });
 
   it('shows revert section without details when no revertDetail provided', () => {
@@ -227,7 +227,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### REVERT/REWORK BEFORE MERGING');
+    expect(result).toContain('### SUGGESTED FIXES BEFORE MERGING');
     expect(result).toContain('Remove rule 6.3.6');
     expect(result).not.toContain('Suggested approach');
   });
@@ -251,7 +251,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('<details><summary><strong>1.</strong> Remove rule 6.3.6');
+    expect(result).toContain('<details><summary><strong>Fix 1:</strong> Remove rule 6.3.6');
     expect(result).toContain('<em>(line 174)</em>');
     expect(result).toContain('**Current prompt:**');
     expect(result).toContain('Copy should be comprehensive');
@@ -278,8 +278,8 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### REVERT/REWORK BEFORE MERGING');
-    expect(result).toContain('<details><summary><strong>1.</strong> Restore §4 preservation constraints');
+    expect(result).toContain('### SUGGESTED FIXES BEFORE MERGING');
+    expect(result).toContain('<details><summary><strong>Fix 1:</strong> Restore §4 preservation constraints');
     expect(result).toContain('<em>(line 100-106)</em>');
     expect(result).toContain('**Current prompt:**');
     expect(result).toContain('### Pre-submission checklist:');

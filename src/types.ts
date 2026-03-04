@@ -89,7 +89,7 @@ export interface SynthesisResult {
 export interface ChangeItem {
   change: string;
   impact: string;
-  effect: 'positive' | 'negative' | 'mixed';
+  effect: 'positive' | 'negative';
   revert?: string;
   revertDetail?: {
     currentCode: string;

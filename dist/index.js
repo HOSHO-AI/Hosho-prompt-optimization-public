@@ -634,9 +634,9 @@ function getChangeEmoji(direction) {
     if (direction === 'improved')
         return '✅';
     if (direction === 'worse')
-        return '⚠️ Worse';
+        return '⚠️';
     if (direction === 'mixed')
-        return '🔄 Mixed';
+        return '⚠️';
     return '➖';
 }
 function cleanCodeSnippet(code) {
@@ -718,8 +718,8 @@ function formatTable(factorResults, insights) {
     const isPRMode = insights.some(f => f.changeDirection);
     let md = '';
     if (isPRMode) {
-        md += `| Factor | PR Impact | Score |\n`;
-        md += `|---|---|---|`;
+        md += `| Factor | PR Impact | PR Rationale | Overall Prompt Score |\n`;
+        md += `|---|---|---|---|`;
     }
     else {
         md += `| Factor | Score |\n`;
@@ -730,7 +730,8 @@ function formatTable(factorResults, insights) {
         const insight = insights.find(f => f.factorId === factor.factorId);
         if (isPRMode && insight?.changeDirection) {
             const changeEmoji = getChangeEmoji(insight.changeDirection);
-            md += `\n| ${factor.factorName} | ${changeEmoji} | ${emoji} |`;
+            const rationale = sanitizeInlineText(insight.changeRationale || '—');
+            md += `\n| ${factor.factorName} | ${changeEmoji} | ${rationale} | ${emoji} |`;
         }
         else {
             md += `\n| ${factor.factorName} | ${emoji} |`;
@@ -743,8 +744,7 @@ function formatVerdict(changeSummary) {
     if (!changeSummary || changeSummary.length === 0)
         return '### ✅ Approve This PR\n\n';
     const hasNegative = changeSummary.some(c => c.effect === 'negative');
-    const hasMixed = changeSummary.some(c => c.effect === 'mixed');
-    if (hasNegative || hasMixed)
+    if (hasNegative)
         return '### ⛔ Request Changes\n\n';
     return '### ✅ Approve This PR\n\n';
 }
@@ -773,7 +773,7 @@ function formatEditLine(tagged) {
     else {
         line = `**${sanitizeInlineText(title)}**`;
     }
-    return `${line} — See ${tagged.factorName} #${f.findingNumber}`;
+    return `${line} — See ${tagged.factorName} (${f.findingNumber})`;
 }
 function formatTopEdits(tagged, limit = 3) {
     if (tagged.length === 0)
@@ -792,7 +792,7 @@ function formatWhatChanged(changeSummary) {
     const sorted = [...changeSummary].sort((a, b) => (effectOrder[a.effect] ?? 1) - (effectOrder[b.effect] ?? 1));
     let md = '### WHAT\'S GOOD AND BAD IN THIS PR\n\n';
     for (const item of sorted) {
-        const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
+        const emoji = item.effect === 'positive' ? '✅' : '⚠️';
         const change = sanitizeInlineText(item.change);
         const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
         md += `- ${emoji} ${change}${impact}\n`;
@@ -803,16 +803,16 @@ function formatWhatChanged(changeSummary) {
 function formatRevertSection(changeSummary) {
     if (!changeSummary)
         return '';
-    const reverts = changeSummary.filter(c => c.effect === 'negative' && c.revert);
+    const reverts = changeSummary.filter(c => c.effect !== 'positive' && c.revert);
     if (reverts.length === 0)
         return '';
-    let md = '### REVERT/REWORK BEFORE MERGING\n\n';
+    let md = '### SUGGESTED FIXES BEFORE MERGING\n\n';
     for (let i = 0; i < reverts.length; i++) {
         const item = reverts[i];
         if (item.revertDetail) {
             const d = item.revertDetail;
             const lineRef = d.startLine === d.endLine ? `${d.startLine}` : `${d.startLine}-${d.endLine}`;
-            md += `<details><summary><strong>${i + 1}.</strong> ${sanitizeInlineText(item.revert)} <em>(line ${lineRef})</em></summary>\n\n`;
+            md += `<details><summary><strong>Fix ${i + 1}:</strong> ${sanitizeInlineText(item.revert)} <em>(line ${lineRef})</em></summary>\n\n`;
             if (d.currentCode.trim()) {
                 const codeFence = getCodeFence(d.currentCode);
                 md += `**Current prompt:**\n\n${codeFence}\n${d.currentCode}\n${codeFence}\n\n`;
@@ -825,7 +825,7 @@ function formatRevertSection(changeSummary) {
             md += `</details>\n\n`;
         }
         else {
-            md += `**${i + 1}.** ${sanitizeInlineText(item.revert)}\n\n`;
+            md += `**Fix ${i + 1}:** ${sanitizeInlineText(item.revert)}\n\n`;
         }
     }
     return md;
