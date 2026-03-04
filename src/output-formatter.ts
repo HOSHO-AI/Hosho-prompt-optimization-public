@@ -149,9 +149,8 @@ function formatVerdict(changeSummary?: ChangeItem[]): string {
   if (!changeSummary || changeSummary.length === 0) return '### ✅ Approve This PR\n\n';
 
   const hasNegative = changeSummary.some(c => c.effect === 'negative');
-  const hasMixed = changeSummary.some(c => c.effect === 'mixed');
 
-  if (hasNegative || hasMixed) return '### ⛔ Request Changes\n\n';
+  if (hasNegative) return '### ⛔ Request Changes\n\n';
   return '### ✅ Approve This PR\n\n';
 }
 
