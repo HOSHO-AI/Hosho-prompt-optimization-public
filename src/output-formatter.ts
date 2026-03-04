@@ -20,8 +20,8 @@ function getTrafficLightEmoji(score: number): string {
 
 function getChangeEmoji(direction: 'improved' | 'no-change' | 'worse' | 'mixed'): string {
   if (direction === 'improved') return '✅';
-  if (direction === 'worse') return '⚠️ Worse';
-  if (direction === 'mixed') return '🔄 Mixed';
+  if (direction === 'worse') return '⚠️';
+  if (direction === 'mixed') return '⚠️';
   return '➖';
 }
 
@@ -121,8 +121,8 @@ function formatTable(
 
   let md = '';
   if (isPRMode) {
-    md += `| Factor | PR Impact | Score |\n`;
-    md += `|---|---|---|`;
+    md += `| Factor | PR Impact | PR Rationale | Overall Prompt Score |\n`;
+    md += `|---|---|---|---|`;
   } else {
     md += `| Factor | Score |\n`;
     md += `|---|---|`;
@@ -134,7 +134,8 @@ function formatTable(
 
     if (isPRMode && insight?.changeDirection) {
       const changeEmoji = getChangeEmoji(insight.changeDirection);
-      md += `\n| ${factor.factorName} | ${changeEmoji} | ${emoji} |`;
+      const rationale = sanitizeInlineText(insight.changeRationale || '—');
+      md += `\n| ${factor.factorName} | ${changeEmoji} | ${rationale} | ${emoji} |`;
     } else {
       md += `\n| ${factor.factorName} | ${emoji} |`;
     }
@@ -204,7 +205,7 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
 
   let md = '### WHAT\'S GOOD AND BAD IN THIS PR\n\n';
   for (const item of sorted) {
-    const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
+    const emoji = item.effect === 'positive' ? '✅' : '⚠️';
     const change = sanitizeInlineText(item.change);
     const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
     md += `- ${emoji} ${change}${impact}\n`;
@@ -215,7 +216,7 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
 
 function formatRevertSection(changeSummary?: ChangeItem[]): string {
   if (!changeSummary) return '';
-  const reverts = changeSummary.filter(c => c.effect === 'negative' && c.revert);
+  const reverts = changeSummary.filter(c => c.effect !== 'positive' && c.revert);
   if (reverts.length === 0) return '';
 
   let md = '### REVERT/REWORK BEFORE MERGING\n\n';

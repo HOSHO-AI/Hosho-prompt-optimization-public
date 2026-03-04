@@ -634,9 +634,9 @@ function getChangeEmoji(direction) {
     if (direction === 'improved')
         return '✅';
     if (direction === 'worse')
-        return '⚠️ Worse';
+        return '⚠️';
     if (direction === 'mixed')
-        return '🔄 Mixed';
+        return '⚠️';
     return '➖';
 }
 function cleanCodeSnippet(code) {
@@ -718,8 +718,8 @@ function formatTable(factorResults, insights) {
     const isPRMode = insights.some(f => f.changeDirection);
     let md = '';
     if (isPRMode) {
-        md += `| Factor | PR Impact | Score |\n`;
-        md += `|---|---|---|`;
+        md += `| Factor | PR Impact | PR Rationale | Overall Prompt Score |\n`;
+        md += `|---|---|---|---|`;
     }
     else {
         md += `| Factor | Score |\n`;
@@ -730,7 +730,8 @@ function formatTable(factorResults, insights) {
         const insight = insights.find(f => f.factorId === factor.factorId);
         if (isPRMode && insight?.changeDirection) {
             const changeEmoji = getChangeEmoji(insight.changeDirection);
-            md += `\n| ${factor.factorName} | ${changeEmoji} | ${emoji} |`;
+            const rationale = sanitizeInlineText(insight.changeRationale || '—');
+            md += `\n| ${factor.factorName} | ${changeEmoji} | ${rationale} | ${emoji} |`;
         }
         else {
             md += `\n| ${factor.factorName} | ${emoji} |`;
@@ -792,7 +793,7 @@ function formatWhatChanged(changeSummary) {
     const sorted = [...changeSummary].sort((a, b) => (effectOrder[a.effect] ?? 1) - (effectOrder[b.effect] ?? 1));
     let md = '### WHAT\'S GOOD AND BAD IN THIS PR\n\n';
     for (const item of sorted) {
-        const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
+        const emoji = item.effect === 'positive' ? '✅' : '⚠️';
         const change = sanitizeInlineText(item.change);
         const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
         md += `- ${emoji} ${change}${impact}\n`;
@@ -803,7 +804,7 @@ function formatWhatChanged(changeSummary) {
 function formatRevertSection(changeSummary) {
     if (!changeSummary)
         return '';
-    const reverts = changeSummary.filter(c => c.effect === 'negative' && c.revert);
+    const reverts = changeSummary.filter(c => c.effect !== 'positive' && c.revert);
     if (reverts.length === 0)
         return '';
     let md = '### REVERT/REWORK BEFORE MERGING\n\n';

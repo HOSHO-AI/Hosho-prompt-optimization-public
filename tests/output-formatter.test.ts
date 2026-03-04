@@ -217,7 +217,7 @@ describe('formatPRComment', () => {
     const result = formatPRComment([comp], 42);
     expect(result).toContain('### WHAT\'S GOOD AND BAD IN THIS PR');
     expect(result).toContain('✅ XML tags on 5 variables');
-    expect(result).toContain('❌ Removed §4 rules');
+    expect(result).toContain('⚠️ Removed §4 rules');
   });
 
   it('shows revert section without details when no revertDetail provided', () => {
