@@ -180,7 +180,7 @@ function formatEditLine(tagged: TaggedFinding): string {
     line = `**${sanitizeInlineText(title)}**`;
   }
 
-  return `${line} — See ${tagged.factorName} #${f.findingNumber}`;
+  return `${line} — See ${tagged.factorName} (${f.findingNumber})`;
 }
 
 function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
