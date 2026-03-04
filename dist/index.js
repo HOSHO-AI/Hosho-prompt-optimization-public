@@ -806,13 +806,13 @@ function formatRevertSection(changeSummary) {
     const reverts = changeSummary.filter(c => c.effect !== 'positive' && c.revert);
     if (reverts.length === 0)
         return '';
-    let md = '### REVERT/REWORK BEFORE MERGING\n\n';
+    let md = '### SUGGESTED FIXES BEFORE MERGING\n\n';
     for (let i = 0; i < reverts.length; i++) {
         const item = reverts[i];
         if (item.revertDetail) {
             const d = item.revertDetail;
             const lineRef = d.startLine === d.endLine ? `${d.startLine}` : `${d.startLine}-${d.endLine}`;
-            md += `<details><summary><strong>${i + 1}.</strong> ${sanitizeInlineText(item.revert)} <em>(line ${lineRef})</em></summary>\n\n`;
+            md += `<details><summary><strong>Fix ${i + 1}:</strong> ${sanitizeInlineText(item.revert)} <em>(line ${lineRef})</em></summary>\n\n`;
             if (d.currentCode.trim()) {
                 const codeFence = getCodeFence(d.currentCode);
                 md += `**Current prompt:**\n\n${codeFence}\n${d.currentCode}\n${codeFence}\n\n`;
@@ -825,7 +825,7 @@ function formatRevertSection(changeSummary) {
             md += `</details>\n\n`;
         }
         else {
-            md += `**${i + 1}.** ${sanitizeInlineText(item.revert)}\n\n`;
+            md += `**Fix ${i + 1}:** ${sanitizeInlineText(item.revert)}\n\n`;
         }
     }
     return md;
