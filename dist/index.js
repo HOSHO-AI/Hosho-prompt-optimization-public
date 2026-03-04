@@ -791,7 +791,7 @@ function formatEditLine(tagged) {
     else {
         line = `**${sanitizeInlineText(title)}**`;
     }
-    return `${line} — See ${tagged.factorName} [${f.findingNumber}]`;
+    return `${line} — See ${tagged.factorName} #${f.findingNumber}`;
 }
 function formatTopEdits(tagged, limit = 3) {
     if (tagged.length === 0)
