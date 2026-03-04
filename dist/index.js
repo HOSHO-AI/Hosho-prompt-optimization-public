@@ -453,24 +453,43 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             before,
         });
     }
-    // Step 3: Call Lambda API
-    core.info(`Calling review API with ${apiFiles.length} file(s)...`);
-    const apiResponse = await (0, api_client_1.callReviewAPI)(apiUrl, {
-        apiKey,
-        mode: 'pr',
-        systemOverview: systemOverview || undefined,
-        files: apiFiles,
-        metadata: {
-            repository: `${owner}/${repo}`,
-            prNumber: pullNumber,
-        },
-    }, timeoutMs);
-    if (apiResponse.status !== 'success' || !apiResponse.results) {
-        throw new Error(`API returned error: ${apiResponse.message || 'Unknown error'}`);
+    // Step 3: Call Lambda API (one file at a time to avoid connection timeout on large PRs)
+    core.info(`Reviewing ${apiFiles.length} file(s)...`);
+    const allResults = [];
+    const errors = [];
+    for (const file of apiFiles) {
+        core.info(`  → ${file.name} (${allResults.length + 1}/${apiFiles.length})...`);
+        try {
+            const resp = await (0, api_client_1.callReviewAPI)(apiUrl, {
+                apiKey,
+                mode: 'pr',
+                systemOverview: systemOverview || undefined,
+                files: [file],
+                metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber },
+            }, timeoutMs);
+            if (resp.status !== 'success' || !resp.results) {
+                errors.push(`${file.name}: ${resp.message || 'Unknown API error'}`);
+                core.warning(`API error for ${file.name}: ${resp.message || 'Unknown error'}. Skipping.`);
+                continue;
+            }
+            allResults.push(...resp.results);
+            core.info(`  ✓ ${file.name} done`);
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            errors.push(`${file.name}: ${msg}`);
+            core.warning(`Failed to review ${file.name}: ${msg}. Skipping.`);
+        }
     }
-    core.info(`API returned ${apiResponse.results.length} evaluation(s).`);
+    if (allResults.length === 0) {
+        throw new Error(`All ${apiFiles.length} file(s) failed: ${errors.join('; ')}`);
+    }
+    if (errors.length > 0) {
+        core.warning(`${errors.length}/${apiFiles.length} file(s) failed: ${errors.join('; ')}`);
+    }
+    core.info(`Received ${allResults.length}/${apiFiles.length} evaluation(s).`);
     // Step 4: Map API results to ComparisonResult[]
-    const comparisons = apiResponse.results.map(r => ({
+    const comparisons = allResults.map(r => ({
         ...r.comparison,
         targetModelFamily: r.targetModelFamily,
         targetModelName: r.targetModelName,
