@@ -747,7 +747,7 @@ function formatVerdict(changeSummary) {
     const hasNegative = changeSummary.some(c => c.effect === 'negative');
     const hasMixed = changeSummary.some(c => c.effect === 'mixed');
     if (hasNegative || hasMixed)
-        return '### ⛔ REJECT THIS PR\n\n';
+        return '### ⛔ REQUEST CHANGES\n\n';
     return '### ✅ APPROVE THIS PR\n\n';
 }
 function formatEditLine(tagged) {

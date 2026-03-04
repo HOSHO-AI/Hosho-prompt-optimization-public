@@ -201,7 +201,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### ⛔ REJECT THIS PR');
+    expect(result).toContain('### ⛔ REQUEST CHANGES');
   });
 
   it('shows what changed section when changeSummary is present', () => {
