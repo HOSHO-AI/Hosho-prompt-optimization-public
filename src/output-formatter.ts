@@ -145,13 +145,13 @@ function formatTable(
 }
 
 function formatVerdict(changeSummary?: ChangeItem[]): string {
-  if (!changeSummary || changeSummary.length === 0) return '### ✅ APPROVE THIS PR\n\n';
+  if (!changeSummary || changeSummary.length === 0) return '### ✅ Approve This PR\n\n';
 
   const hasNegative = changeSummary.some(c => c.effect === 'negative');
   const hasMixed = changeSummary.some(c => c.effect === 'mixed');
 
-  if (hasNegative || hasMixed) return '### ⛔ REQUEST CHANGES\n\n';
-  return '### ✅ APPROVE THIS PR\n\n';
+  if (hasNegative || hasMixed) return '### ⛔ Request Changes\n\n';
+  return '### ✅ Approve This PR\n\n';
 }
 
 function formatEditLine(tagged: TaggedFinding): string {
@@ -202,7 +202,7 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
     (a, b) => (effectOrder[a.effect] ?? 1) - (effectOrder[b.effect] ?? 1)
   );
 
-  let md = '### What\'s good and bad in this PR\n\n';
+  let md = '### WHAT\'S GOOD AND BAD IN THIS PR\n\n';
   for (const item of sorted) {
     const emoji = item.effect === 'positive' ? '✅' : item.effect === 'negative' ? '❌' : '⚠️';
     const change = sanitizeInlineText(item.change);
@@ -218,7 +218,7 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
   const reverts = changeSummary.filter(c => c.effect === 'negative' && c.revert);
   if (reverts.length === 0) return '';
 
-  let md = '### Revert/rework before merging\n\n';
+  let md = '### REVERT/REWORK BEFORE MERGING\n\n';
   for (let i = 0; i < reverts.length; i++) {
     const item = reverts[i];
     if (item.revertDetail) {
@@ -315,7 +315,7 @@ export function formatOnDemandSummary(
   // Top 3 edits
   const allFindings = gatherFindings(enrichedInsights);
   if (allFindings.length > 0) {
-    md += `### Top 3 edits\n\n`;
+    md += `### TOP 3 EDITS\n\n`;
     md += formatTopEdits(allFindings, 3);
   }
 
@@ -364,7 +364,7 @@ function formatPRFileSection(
     top3Candidates = [...top3Candidates, ...degradedFindings].slice(0, 3);
   }
   if (top3Candidates.length > 0) {
-    md += `### Top 3 edits to further improve (beyond this PR)\n\n`;
+    md += `### TOP 3 EDITS TO FURTHER IMPROVE (BEYOND THIS PR)\n\n`;
     md += formatTopEdits(top3Candidates, 3);
   }
 

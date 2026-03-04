@@ -155,7 +155,7 @@ describe('formatPRComment', () => {
 
   it('shows top 3 edits section with factor references', () => {
     const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('### Top 3 edits to further improve (beyond this PR)');
+    expect(result).toContain('### TOP 3 EDITS TO FURTHER IMPROVE (BEYOND THIS PR)');
     expect(result).toContain('**User inputs lack delimiters**');
     expect(result).toContain('See Prompt Injection Resistance #1');
   });
@@ -194,7 +194,7 @@ describe('formatPRComment', () => {
 
   it('shows APPROVE verdict when no negative changes in changeSummary', () => {
     const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('### ✅ APPROVE THIS PR');
+    expect(result).toContain('### ✅ Approve This PR');
   });
 
   it('shows REJECT verdict when changeSummary has negative items', () => {
@@ -204,7 +204,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### ⛔ REQUEST CHANGES');
+    expect(result).toContain('### ⛔ Request Changes');
   });
 
   it('shows what changed section when changeSummary is present', () => {
@@ -215,7 +215,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### What\'s good and bad in this PR');
+    expect(result).toContain('### WHAT\'S GOOD AND BAD IN THIS PR');
     expect(result).toContain('✅ XML tags on 5 variables');
     expect(result).toContain('❌ Removed §4 rules');
   });
@@ -227,7 +227,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### Revert/rework before merging');
+    expect(result).toContain('### REVERT/REWORK BEFORE MERGING');
     expect(result).toContain('Remove rule 6.3.6');
     expect(result).not.toContain('Suggested approach');
   });
@@ -278,7 +278,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).toContain('### Revert/rework before merging');
+    expect(result).toContain('### REVERT/REWORK BEFORE MERGING');
     expect(result).toContain('<details><summary><strong>1.</strong> Restore §4 preservation constraints');
     expect(result).toContain('<em>(line 100-106)</em>');
     expect(result).toContain('**Current prompt:**');
@@ -318,7 +318,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42);
-    expect(result).not.toContain('### Top 3 edits');
+    expect(result).not.toContain('### TOP 3 EDITS');
   });
 
   it('includes hosho bot footer', () => {
@@ -452,7 +452,7 @@ describe('formatOnDemandSummary', () => {
     ];
 
     const result = formatOnDemandSummary(synthesis, factorResults);
-    expect(result).toContain('### Top 3 edits');
+    expect(result).toContain('### TOP 3 EDITS');
     expect(result).toContain('**No input delimiters**');
     expect(result).toContain('<strong>Prompt Injection Resistance</strong>');
     expect(result).toContain('1. No input delimiters');
