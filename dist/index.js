@@ -743,7 +743,7 @@ function formatTable(factorResults, insights) {
             const changeEmoji = getChangeEmoji(insight.changeDirection);
             const prRationale = sanitizeInlineText(insight.changeRationale || '—');
             const scoreRationale = sanitizeInlineText(factor.tableRationale || '—');
-            md += `\n| ${factor.factorName} | ${changeEmoji} | ${emoji} | PR rationale: ${prRationale}<br>Score rationale: ${scoreRationale} |`;
+            md += `\n| ${factor.factorName} | ${changeEmoji} | ${emoji} | <b><u>PR rationale:</u></b> ${prRationale}<br><b><u>Score rationale:</u></b> ${scoreRationale} |`;
         }
         else {
             const rationale = sanitizeInlineText(factor.tableRationale || '—');
