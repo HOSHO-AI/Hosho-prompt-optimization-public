@@ -95,6 +95,9 @@ async function runPRMode(
   let baseSha: string;
   let headSha: string;
 
+  let prTitle = '';
+  let prDescription = '';
+
   if (prNumberInput) {
     // Slash command path — PR data not in payload, fetch via API
     pullNumber = parseInt(prNumberInput, 10);
@@ -106,6 +109,8 @@ async function runPRMode(
     });
     baseSha = prData.base.sha;
     headSha = prData.head.sha;
+    prTitle = prData.title || '';
+    prDescription = (prData.body || '').slice(0, 500);
     core.info(`Slash command: fetched PR #${pullNumber} — base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
   } else {
     // Normal pull_request event — SHAs in payload
@@ -116,6 +121,8 @@ async function runPRMode(
     pullNumber = pr.number;
     baseSha = pr.base.sha;
     headSha = pr.head.sha;
+    prTitle = pr.title || '';
+    prDescription = ((pr.body as string) || '').slice(0, 500);
     core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
   }
 
@@ -164,7 +171,7 @@ async function runPRMode(
         outputMode,
         systemOverview: systemOverview || undefined,
         files: [file],
-        metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber },
+        metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber, prTitle, prDescription },
       }, timeoutMs);
 
       if (resp.status !== 'success' || !resp.results) {

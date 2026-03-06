@@ -19,7 +19,7 @@ export interface ReviewAPIRequest {
     after: string;
     before: string | null;
   }>;
-  metadata?: { repository?: string; prNumber?: number };
+  metadata?: { repository?: string; prNumber?: number; prTitle?: string; prDescription?: string };
 }
 
 export interface ReviewFileResult {

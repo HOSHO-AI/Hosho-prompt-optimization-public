@@ -411,6 +411,8 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     let pullNumber;
     let baseSha;
     let headSha;
+    let prTitle = '';
+    let prDescription = '';
     if (prNumberInput) {
         // Slash command path — PR data not in payload, fetch via API
         pullNumber = parseInt(prNumberInput, 10);
@@ -422,6 +424,8 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         });
         baseSha = prData.base.sha;
         headSha = prData.head.sha;
+        prTitle = prData.title || '';
+        prDescription = (prData.body || '').slice(0, 500);
         core.info(`Slash command: fetched PR #${pullNumber} — base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
     }
     else {
@@ -433,6 +437,8 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         pullNumber = pr.number;
         baseSha = pr.base.sha;
         headSha = pr.head.sha;
+        prTitle = pr.title || '';
+        prDescription = (pr.body || '').slice(0, 500);
         core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
     }
     // Step 1: Identify changed prompt files
@@ -470,7 +476,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 outputMode,
                 systemOverview: systemOverview || undefined,
                 files: [file],
-                metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber },
+                metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber, prTitle, prDescription },
             }, timeoutMs);
             if (resp.status !== 'success' || !resp.results) {
                 errors.push(`${file.name}: ${resp.message || 'Unknown API error'}`);
