@@ -975,7 +975,8 @@ function formatReviewComment(comparisons, prNumber) {
         md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
         md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
     }
-    md += `\n<p align="center"><b>Comment <code>/hosho-improve</code> on this PR for detailed scoring and improvement suggestions.</b></p>\n\n`;
+    // TODO: Re-enable when customers have /hosho-improve workflow configured
+    // md += `\n<p align="center"><b>Comment <code>/hosho-improve</code> on this PR for detailed scoring and improvement suggestions.</b></p>\n\n`;
     md += `*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
     return md;
 }
@@ -986,7 +987,8 @@ function formatReviewJobSummary(comparisons, prNumber) {
         if (comparisons.length > 1)
             md += `\n---\n\n`;
     }
-    md += `\n<p align="center"><b>Comment <code>/hosho-improve</code> on this PR for detailed scoring and improvement suggestions.</b></p>\n\n`;
+    // TODO: Re-enable when customers have /hosho-improve workflow configured
+    // md += `\n<p align="center"><b>Comment <code>/hosho-improve</code> on this PR for detailed scoring and improvement suggestions.</b></p>\n\n`;
     md += `*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
     return md;
 }
