@@ -478,7 +478,10 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 continue;
             }
             allResults.push(...resp.results);
-            core.info(`  ✓ ${file.name} done`);
+            const modelInfo = resp.results[0]?.targetModelFamily
+                ? ` (model: ${resp.results[0].targetModelFamily}${resp.results[0].targetModelName ? ` / ${resp.results[0].targetModelName}` : ''})`
+                : '';
+            core.info(`  ✓ ${file.name} done${modelInfo}`);
         }
         catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
@@ -567,7 +570,10 @@ async function runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeo
     // Set outputs
     core.setOutput('overall_score', result.synthesis.overallScore);
     core.setOutput('review_summary', result.synthesis.promptDescription);
-    core.info(`Done. Overall: ${result.synthesis.overallScore}`);
+    const modelInfo = result.targetModelFamily
+        ? ` | Model: ${result.targetModelFamily}${result.targetModelName ? ` / ${result.targetModelName}` : ''}`
+        : '';
+    core.info(`Done. Overall: ${result.synthesis.overallScore}${modelInfo}`);
 }
 // ---- Run Name ----
 async function updateWorkflowRunName(promptNames, prNumber) {
