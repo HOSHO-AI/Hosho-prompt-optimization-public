@@ -733,8 +733,8 @@ function formatTable(factorResults, insights) {
         md += `|---|---|---|---|`;
     }
     else {
-        md += `| Factor | Score |\n`;
-        md += `|---|---|`;
+        md += `| Factor | Score | Rationale |\n`;
+        md += `|---|---|---|`;
     }
     for (const factor of factorResults) {
         const emoji = getTrafficLightEmoji(factor.score);
@@ -745,7 +745,8 @@ function formatTable(factorResults, insights) {
             md += `\n| ${factor.factorName} | ${changeEmoji} | ${rationale} | ${emoji} |`;
         }
         else {
-            md += `\n| ${factor.factorName} | ${emoji} |`;
+            const rationale = sanitizeInlineText(factor.tableRationale || '—');
+            md += `\n| ${factor.factorName} | ${emoji} | ${rationale} |`;
         }
     }
     md += '\n\n';
