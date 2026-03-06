@@ -121,7 +121,7 @@ function formatTable(
 
   let md = '';
   if (isPRMode) {
-    md += `| Factor | PR Impact | PR Rationale | Overall Prompt Score |\n`;
+    md += `| Factor | PR Impact | Overall Prompt Score | Rationale |\n`;
     md += `|---|---|---|---|`;
   } else {
     md += `| Factor | Score | Rationale |\n`;
@@ -134,8 +134,9 @@ function formatTable(
 
     if (isPRMode && insight?.changeDirection) {
       const changeEmoji = getChangeEmoji(insight.changeDirection);
-      const rationale = sanitizeInlineText(insight.changeRationale || '—');
-      md += `\n| ${factor.factorName} | ${changeEmoji} | ${rationale} | ${emoji} |`;
+      const prRationale = sanitizeInlineText(insight.changeRationale || '—');
+      const scoreRationale = sanitizeInlineText(factor.tableRationale || '—');
+      md += `\n| ${factor.factorName} | ${changeEmoji} | ${emoji} | PR rationale: ${prRationale}<br>Score rationale: ${scoreRationale} |`;
     } else {
       const rationale = sanitizeInlineText(factor.tableRationale || '—');
       md += `\n| ${factor.factorName} | ${emoji} | ${rationale} |`;
