@@ -973,7 +973,7 @@ function formatReviewComment(comparisons, prNumber) {
         md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
         md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
     }
-    md += `\n*For detailed scoring and improvement suggestions, comment \`/hosho-improve\` on this PR.*\n\n`;
+    md += `\n<p align="center"><b>For detailed scoring and improvement suggestions, comment <code>/hosho-improve</code> on this PR.</b></p>\n\n`;
     md += `*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
     return md;
 }
@@ -984,7 +984,7 @@ function formatReviewJobSummary(comparisons, prNumber) {
         if (comparisons.length > 1)
             md += `\n---\n\n`;
     }
-    md += `\n*For detailed scoring and improvement suggestions, comment \`/hosho-improve\` on this PR.*\n\n`;
+    md += `\n<p align="center"><b>For detailed scoring and improvement suggestions, comment <code>/hosho-improve</code> on this PR.</b></p>\n\n`;
     md += `*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
     return md;
 }
