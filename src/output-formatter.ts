@@ -461,6 +461,8 @@ export function formatReviewJobSummary(
     if (comparisons.length > 1) md += `\n---\n\n`;
   }
 
+  md += `\n*For detailed scoring and improvement suggestions, comment \`/hosho-improve\` on this PR.*\n\n`;
+  md += `*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
   return md;
 }
 
