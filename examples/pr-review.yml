@@ -1,7 +1,17 @@
-name: Hosho Bot — Prompt Review (PR)
-run-name: "Hosho Bot — PR #${{ github.event.pull_request.number }}"
+name: Hosho Bot — Prompt Review (PR + Slash Commands)
+run-name: >-
+  Hosho Bot —
+  ${{ github.event_name == 'pull_request'
+      && format('PR #{0}', github.event.pull_request.number)
+      || github.event_name == 'issue_comment'
+      && format('PR #{0} (slash cmd)', github.event.issue.number)
+      || 'Manual' }}
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Triggers:
+#   1. pull_request  — automatic review when prompt files change in a PR
+#   2. issue_comment — /hosho-review (re-run review) or /hosho-improve (full evaluation)
+#
 # Choose ONE trigger pattern below — match it to the action input you use.
 #
 # Option A: Pattern-based — triggers on any file matching a glob pattern
@@ -17,6 +27,12 @@ on:
     paths:
       - '**/*system-prompt*.md'   # Option A: any file with "system-prompt" in the name
       # - 'prompts/**'            # Option B: any file in the prompts/ directory
+  issue_comment:
+    types: [created]              # Enables /hosho-review and /hosho-improve slash commands
+
+concurrency:
+  group: hosho-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -27,11 +43,39 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false   # Skip draft PRs
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+      || (github.event_name == 'issue_comment'
+          && github.event.issue.pull_request != null
+          && (contains(github.event.comment.body, '/hosho-review')
+              || contains(github.event.comment.body, '/hosho-improve')))
     steps:
+      # Slash commands need to look up the PR branch before checkout
+      - name: Get PR branch (slash command only)
+        if: github.event_name == 'issue_comment'
+        id: pr_details
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.issue.number }}
+          PR_BRANCH=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json headRefName -q '.headRefName')
+          if [ -z "$PR_BRANCH" ]; then
+            echo "::error::Could not find PR branch for #$PR_NUMBER"
+            exit 1
+          fi
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr_branch=$PR_BRANCH" >> $GITHUB_OUTPUT
+
       - uses: actions/checkout@v4
+        if: github.event_name != 'issue_comment'
         with:
           fetch-depth: 0   # Required — the action needs git history to compare versions
+
+      - uses: actions/checkout@v4
+        if: github.event_name == 'issue_comment'
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.pr_details.outputs.pr_branch }}
 
       - uses: HOSHO-AI/Hosho-prompt-optimization-public@v1
         env:
@@ -40,4 +84,5 @@ jobs:
           api_key: ${{ secrets.HOSHO_API_KEY }}
           file_pattern: '**/*system-prompt*.md'   # Option A
           # prompt_path: prompts/                  # Option B
+          pr_number: ${{ steps.pr_details.outputs.pr_number || '' }}
           # system_overview: docs/system-overview.md   # Optional — see step 4 in README

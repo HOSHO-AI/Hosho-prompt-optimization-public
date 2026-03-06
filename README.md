@@ -17,7 +17,7 @@ Your prompts are evaluated across 6 quality factors drawn from prompt engineerin
 
 For every factor that isn't green, you get specific findings — what's missing, a snippet from your prompt, and a proposed fix you can drop in.
 
-**PR mode** posts a review comment directly on your pull request with the full evaluation, including whether each factor improved or regressed compared to the previous version. **On-demand mode** writes the results to the Job Summary in the Actions tab.
+**PR mode** automatically posts a review summary on your pull request — verdict, what changed, and suggested fixes. For detailed scoring and improvement suggestions, comment `/hosho-improve` on the PR. **On-demand mode** writes full results to the Job Summary in the Actions tab.
 
 ---
 
@@ -45,6 +45,8 @@ run-name: >-
   Hosho Prompt Review —
   ${{ github.event_name == 'pull_request'
       && format('PR #{0}', github.event.pull_request.number)
+      || github.event_name == 'issue_comment'
+      && format('PR #{0} (slash cmd)', github.event.issue.number)
       || inputs.prompt_file }}
 
 on:
@@ -53,11 +55,17 @@ on:
       - '**/*system-prompt*.md'   # Adjust to match your prompt file naming pattern
       # To match multiple patterns, add more lines:
       # - '**/*user-prompt*.md'
+  issue_comment:
+    types: [created]              # Enables /hosho-review and /hosho-improve slash commands
   workflow_dispatch:
     inputs:
       prompt_file:
         description: "Path to prompt file to review"
         required: true
+
+concurrency:
+  group: hosho-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -68,10 +76,40 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+      || (github.event_name == 'issue_comment'
+          && github.event.issue.pull_request != null
+          && (contains(github.event.comment.body, '/hosho-review')
+              || contains(github.event.comment.body, '/hosho-improve')))
     steps:
+      # Slash commands need to look up the PR branch before checkout
+      - name: Get PR branch (slash command only)
+        if: github.event_name == 'issue_comment'
+        id: pr_details
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.issue.number }}
+          PR_BRANCH=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json headRefName -q '.headRefName')
+          if [ -z "$PR_BRANCH" ]; then
+            echo "::error::Could not find PR branch for #$PR_NUMBER"
+            exit 1
+          fi
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr_branch=$PR_BRANCH" >> $GITHUB_OUTPUT
+
       - uses: actions/checkout@v4
+        if: github.event_name != 'issue_comment'
         with:
           fetch-depth: 0   # Required — the action needs git history to compare versions
+
+      - uses: actions/checkout@v4
+        if: github.event_name == 'issue_comment'
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.pr_details.outputs.pr_branch }}
 
       - uses: HOSHO-AI/Hosho-prompt-optimization-public@v1
         env:
@@ -82,14 +120,17 @@ jobs:
           #   file_pattern: '**/*system-prompt*.md, **/*user-prompt*.md'
           file_pattern: '**/*system-prompt*.md'
           prompt_file: ${{ github.event.inputs.prompt_file || '' }}
+          pr_number: ${{ steps.pr_details.outputs.pr_number || '' }}
           # system_overview: docs/system-overview.md   # Optional — see step 4
 ```
 
-That's it — one file handles both PR reviews and on-demand reviews. Every PR that changes matching files gets an automated review comment. You can also run it manually from the Actions tab to evaluate any prompt file on demand.
+That's it — one file handles PR reviews, slash commands, and on-demand reviews. Every PR that changes matching files gets an automated review comment. You can also comment `/hosho-improve` on a PR for detailed scoring, or run manually from the Actions tab to evaluate any prompt file on demand.
 
 The `file_pattern` input supports comma-separated glob patterns (e.g., `**/*system-prompt*.md, **/*user-prompt*.md`) to match multiple naming conventions. Make sure the `paths:` trigger at the top of the workflow matches the same patterns so the workflow triggers correctly.
 
 > **Note:** The `file_pattern` input uses glob matching (powered by [minimatch](https://github.com/isaacs/minimatch)), so `**/*system-prompt*.md` matches files named `system-prompt.md` or `my-agent-system-prompt.md` in any directory.
+
+> **Note:** The `issue_comment` trigger fires on *all* PR comments. The `if` condition filters it down to only `/hosho-review` and `/hosho-improve` commands, so other comments are ignored.
 
 ### 4. (Optional) Add a system overview
 
@@ -154,7 +195,8 @@ On-demand mode is already included in the workflow above via the `workflow_dispa
 | `prompt_path` | No | `''` | Directory prefix for identifying prompt files in PRs (e.g. `prompts/`). Alternative to `file_pattern` |
 | `system_overview` | No | `''` | Path to a system overview markdown file |
 | `api_url` | No | Built-in | API endpoint URL — override for enterprise/self-hosted deployments |
-| `timeout` | No | `180` | API call timeout in seconds |
+| `timeout` | No | `600` | API call timeout in seconds |
+| `pr_number` | No | `''` | PR number — set automatically when using slash commands (see workflow above) |
 
 ## Outputs
 
@@ -175,9 +217,20 @@ If multiple prompt files are changed in the same PR, each file is evaluated inde
 
 For newly added files, the action scores the prompt but skips the impact analysis (since there's no previous version to compare against). The Impact column appears only for modified or renamed files. Deleted files are skipped.
 
+### Slash Commands
+
+Comment on any open PR to trigger a review:
+
+| Command | What it does |
+|---------|-------------|
+| `/hosho-review` | Re-runs the review summary (same as the automatic PR review) |
+| `/hosho-improve` | Full evaluation with detailed scoring, improvement suggestions, and before/after code snippets |
+
+Slash commands require the `issue_comment` trigger in your workflow — already included in the setup workflow above. The action automatically detects which command was used and adjusts the output accordingly.
+
 ### On-Demand Mode
 
-Triggered via `workflow_dispatch` (manual run) or any non-PR event. Requires the `prompt_file` input. Writes results to the Job Summary in the Actions tab.
+Triggered via `workflow_dispatch` (manual run) or any non-PR event. Requires the `prompt_file` input. Writes full evaluation results to the Job Summary in the Actions tab.
 
 The workflow in step 3 above already includes on-demand support via the `workflow_dispatch` trigger. See [`examples/on-demand.yml`](examples/on-demand.yml) for a standalone alternative.
 
@@ -223,7 +276,8 @@ This GitHub Action client is open source under the [MIT License](LICENSE). The H
 | "fatal: bad revision" or "path not found" in logs | Add `fetch-depth: 0` to your `actions/checkout` step |
 | "Resource not accessible by integration" (403) | Add `permissions: pull-requests: write` and `issues: write` to the workflow |
 | No PR comment appears but action succeeds | Check that `GITHUB_TOKEN` has write permissions and the workflow has the permissions block |
-| Action times out | Default timeout is 180s (3 minutes). Evaluations take 60-90 seconds per file. For many files, increase with `timeout: 300` |
+| Action times out | Default timeout is 600s (10 minutes). Evaluations take 60-90 seconds per file. For many files, increase with `timeout: 600` |
+| Slash command doesn't trigger | Ensure your workflow has the `issue_comment` trigger and the `if` condition checks for the command (see setup workflow above) |
 
 ---
 
