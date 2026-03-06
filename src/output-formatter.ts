@@ -445,7 +445,8 @@ export function formatReviewComment(
     md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
   }
 
-  md += `\n*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
+  md += `\n*For detailed scoring and improvement suggestions, comment \`/hosho-improve\` on this PR.*\n\n`;
+  md += `*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
   return md;
 }
 
