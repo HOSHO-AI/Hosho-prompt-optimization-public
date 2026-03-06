@@ -394,7 +394,7 @@ export function formatPRComment(
     md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
   }
 
-  md += `\n*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
+  md += `\n*Hosho Bot*\n`;
   return md;
 }
 
@@ -449,7 +449,7 @@ export function formatReviewComment(
 
   // TODO: Re-enable when customers have /hosho-improve workflow configured
   // md += `\n<p align="center"><b>Comment <code>/hosho-improve</code> on this PR for detailed scoring and improvement suggestions.</b></p>\n\n`;
-  md += `*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
+  md += `*Hosho Bot*\n`;
   return md;
 }
 
@@ -466,7 +466,7 @@ export function formatReviewJobSummary(
 
   // TODO: Re-enable when customers have /hosho-improve workflow configured
   // md += `\n<p align="center"><b>Comment <code>/hosho-improve</code> on this PR for detailed scoring and improvement suggestions.</b></p>\n\n`;
-  md += `*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
+  md += `*Hosho Bot*\n`;
   return md;
 }
 
