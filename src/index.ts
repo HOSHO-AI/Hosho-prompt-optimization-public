@@ -7,7 +7,9 @@ import { fetchFileVersions, fetchFileFromDisk } from './file-fetcher';
 import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
   formatPRComment,
+  formatReviewComment,
   formatJobSummary,
+  formatReviewJobSummary,
   formatOnDemandSummary,
   BOT_MARKER,
 } from './output-formatter';
@@ -44,7 +46,12 @@ async function run(): Promise<void> {
     const eventName = github.context.eventName;
     const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target' || !!prNumberInput;
 
-    core.info(`Mode: ${isPRMode ? 'Pull Request' : 'On-Demand'}`);
+    // Determine outputMode: review (slim) vs improve (full)
+    const isImproveCommand = eventName === 'issue_comment' &&
+      (github.context.payload.comment?.body || '').includes('/hosho-improve');
+    const outputMode: 'review' | 'improve' = isImproveCommand ? 'improve' : 'review';
+
+    core.info(`Mode: ${isPRMode ? 'Pull Request' : 'On-Demand'}, Output: ${isPRMode ? outputMode : 'improve'}`);
 
     if (isPRMode) {
       if (!filePattern && !promptPath) {
@@ -54,7 +61,7 @@ async function run(): Promise<void> {
           'or prompt_path for directory prefix matching (e.g. "prompts/").'
         );
       }
-      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput);
+      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput, outputMode);
     } else {
       await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
     }
@@ -73,7 +80,8 @@ async function runPRMode(
   promptPath: string,
   systemOverview: string,
   timeoutMs: number,
-  prNumberInput?: string
+  prNumberInput?: string,
+  outputMode: 'review' | 'improve' = 'review',
 ): Promise<void> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -153,6 +161,7 @@ async function runPRMode(
       const resp = await callReviewAPI(apiUrl, {
         apiKey,
         mode: 'pr',
+        outputMode,
         systemOverview: systemOverview || undefined,
         files: [file],
         metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber },
@@ -202,13 +211,17 @@ async function runPRMode(
   }
 
   // Step 5: Post PR comment
-  core.info('Posting PR review comment...');
-  const commentBody = formatPRComment(comparisons, pullNumber);
+  core.info(`Posting PR ${outputMode === 'review' ? 'review' : 'improve'} comment...`);
+  const commentBody = outputMode === 'review'
+    ? formatReviewComment(comparisons, pullNumber)
+    : formatPRComment(comparisons, pullNumber);
   await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
 
   // Step 6: Write Job Summary
   core.info('Writing Job Summary...');
-  const summaryBody = formatJobSummary(comparisons, pullNumber);
+  const summaryBody = outputMode === 'review'
+    ? formatReviewJobSummary(comparisons, pullNumber)
+    : formatJobSummary(comparisons, pullNumber);
   await core.summary.addRaw(summaryBody).write();
 
   // Step 8: Set outputs

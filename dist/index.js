@@ -378,14 +378,18 @@ async function run() {
         // Determine mode
         const eventName = github.context.eventName;
         const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target' || !!prNumberInput;
-        core.info(`Mode: ${isPRMode ? 'Pull Request' : 'On-Demand'}`);
+        // Determine outputMode: review (slim) vs improve (full)
+        const isImproveCommand = eventName === 'issue_comment' &&
+            (github.context.payload.comment?.body || '').includes('/hosho-improve');
+        const outputMode = isImproveCommand ? 'improve' : 'review';
+        core.info(`Mode: ${isPRMode ? 'Pull Request' : 'On-Demand'}, Output: ${isPRMode ? outputMode : 'improve'}`);
         if (isPRMode) {
             if (!filePattern && !promptPath) {
                 throw new Error('Either file_pattern or prompt_path must be set for PR mode. ' +
                     'Use file_pattern for glob matching (e.g. "**/*system-prompt*.md") ' +
                     'or prompt_path for directory prefix matching (e.g. "prompts/").');
             }
-            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput);
+            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput, outputMode);
         }
         else {
             await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
@@ -397,7 +401,7 @@ async function run() {
     }
 }
 // ---- PR Mode ----
-async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput) {
+async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput, outputMode = 'review') {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
         throw new Error('GITHUB_TOKEN environment variable is required for PR mode');
@@ -463,6 +467,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             const resp = await (0, api_client_1.callReviewAPI)(apiUrl, {
                 apiKey,
                 mode: 'pr',
+                outputMode,
                 systemOverview: systemOverview || undefined,
                 files: [file],
                 metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber },
@@ -509,12 +514,16 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         }
     }
     // Step 5: Post PR comment
-    core.info('Posting PR review comment...');
-    const commentBody = (0, output_formatter_1.formatPRComment)(comparisons, pullNumber);
+    core.info(`Posting PR ${outputMode === 'review' ? 'review' : 'improve'} comment...`);
+    const commentBody = outputMode === 'review'
+        ? (0, output_formatter_1.formatReviewComment)(comparisons, pullNumber)
+        : (0, output_formatter_1.formatPRComment)(comparisons, pullNumber);
     await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
     // Step 6: Write Job Summary
     core.info('Writing Job Summary...');
-    const summaryBody = (0, output_formatter_1.formatJobSummary)(comparisons, pullNumber);
+    const summaryBody = outputMode === 'review'
+        ? (0, output_formatter_1.formatReviewJobSummary)(comparisons, pullNumber)
+        : (0, output_formatter_1.formatJobSummary)(comparisons, pullNumber);
     await core.summary.addRaw(summaryBody).write();
     // Step 8: Set outputs
     const overallScores = comparisons.map((c) => c.synthesis.overallScore);
@@ -619,6 +628,8 @@ exports.BOT_MARKER = void 0;
 exports.formatOnDemandSummary = formatOnDemandSummary;
 exports.formatPRComment = formatPRComment;
 exports.formatJobSummary = formatJobSummary;
+exports.formatReviewComment = formatReviewComment;
+exports.formatReviewJobSummary = formatReviewJobSummary;
 const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
 exports.BOT_MARKER = BOT_MARKER;
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
@@ -938,6 +949,37 @@ function formatJobSummary(comparisons, prNumber) {
     let md = '';
     for (const comp of comparisons) {
         md += formatPRFileSection(comp, prNumber);
+        if (comparisons.length > 1)
+            md += `\n---\n\n`;
+    }
+    return md;
+}
+// ---- Review-mode output (slim: verdict + changes + fixes only) ----
+function formatReviewFileSection(comp, prNumber) {
+    let md = formatHeader(comp.promptFile, comp.synthesis.promptDescription, comp.targetModelFamily, comp.targetModelName, prNumber);
+    md += formatVerdict(comp.changeSummary);
+    md += formatWhatChanged(comp.changeSummary);
+    md += formatRevertSection(comp.changeSummary);
+    return md;
+}
+function formatReviewComment(comparisons, prNumber) {
+    let md = `${BOT_MARKER}\n`;
+    for (const comp of comparisons) {
+        md += formatReviewFileSection(comp, prNumber);
+        if (comparisons.length > 1)
+            md += `\n---\n\n`;
+    }
+    if (md.length > PR_COMMENT_MAX_LENGTH) {
+        md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
+        md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
+    }
+    md += `\n*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
+    return md;
+}
+function formatReviewJobSummary(comparisons, prNumber) {
+    let md = '';
+    for (const comp of comparisons) {
+        md += formatReviewFileSection(comp, prNumber);
         if (comparisons.length > 1)
             md += `\n---\n\n`;
     }

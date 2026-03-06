@@ -410,5 +410,58 @@ export function formatJobSummary(
   return md;
 }
 
+// ---- Review-mode output (slim: verdict + changes + fixes only) ----
+
+function formatReviewFileSection(
+  comp: ComparisonResult,
+  prNumber: number,
+): string {
+  let md = formatHeader(
+    comp.promptFile,
+    comp.synthesis.promptDescription,
+    comp.targetModelFamily,
+    comp.targetModelName,
+    prNumber,
+  );
+  md += formatVerdict(comp.changeSummary);
+  md += formatWhatChanged(comp.changeSummary);
+  md += formatRevertSection(comp.changeSummary);
+  return md;
+}
+
+export function formatReviewComment(
+  comparisons: ComparisonResult[],
+  prNumber: number,
+): string {
+  let md = `${BOT_MARKER}\n`;
+
+  for (const comp of comparisons) {
+    md += formatReviewFileSection(comp, prNumber);
+    if (comparisons.length > 1) md += `\n---\n\n`;
+  }
+
+  if (md.length > PR_COMMENT_MAX_LENGTH) {
+    md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
+    md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
+  }
+
+  md += `\n*Hosho Bot — [hosho.ai](https://hosho.ai)*\n`;
+  return md;
+}
+
+export function formatReviewJobSummary(
+  comparisons: ComparisonResult[],
+  prNumber: number,
+): string {
+  let md = '';
+
+  for (const comp of comparisons) {
+    md += formatReviewFileSection(comp, prNumber);
+    if (comparisons.length > 1) md += `\n---\n\n`;
+  }
+
+  return md;
+}
+
 // Export the bot marker for comment deduplication
 export { BOT_MARKER };

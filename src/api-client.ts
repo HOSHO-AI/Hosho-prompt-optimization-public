@@ -10,6 +10,7 @@ export { DEFAULT_API_URL };
 export interface ReviewAPIRequest {
   apiKey: string;
   mode: 'pr' | 'on-demand';
+  outputMode?: 'review' | 'improve';
   systemOverview?: string;
   files: Array<{
     path: string;
