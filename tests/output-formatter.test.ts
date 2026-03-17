@@ -356,6 +356,42 @@ describe('formatPRComment', () => {
     expect(result).toContain('**Scope** —');
     expect(result).toContain('Added sitemap rule');
   });
+
+  it('groups fixes with identical line ranges into one fix block', () => {
+    const comp = createMockComparison({
+      changeSummary: [
+        {
+          change: 'Added conflicting rule',
+          impact: 'wrong output format',
+          effect: 'negative',
+          category: 'Constraints',
+          revert: 'Remove Section 11 — conflicts with JSON output rule',
+          revertDetail: { currentCode: '## 11) Sitemap rule\nWhen adding a page...', startLine: 434, endLine: 438, suggestedFix: 'Remove this section.', rewrittenCode: '' },
+        },
+        {
+          change: 'Unresolved placeholder',
+          impact: 'ambiguous instruction',
+          effect: 'negative',
+          category: 'Context & Guidance',
+          revert: 'Resolve DOMAIN/path placeholder — model cannot determine value',
+          revertDetail: { currentCode: '## 11) Sitemap rule\nWhen adding a page...', startLine: 434, endLine: 438, suggestedFix: 'Replace DOMAIN with template variable.', rewrittenCode: 'For every new page, append: <url><loc>{{ site_domain }}/path</loc></url>' },
+        },
+      ],
+    });
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
+    // Should show ONE fix block, not two
+    expect(result).toContain('**Fix 1:**');
+    expect(result).not.toContain('**Fix 2:**');
+    // Should list both reasons
+    expect(result).toContain('**Constraints**');
+    expect(result).toContain('**Context & Guidance**');
+    expect(result).toContain('multiple quality factors');
+    // Should show the fix section's problematic text once (not twice for the grouped items)
+    const fixSection = result.split('### SUGGESTED FIXES BEFORE MERGING')[1]?.split('###')[0] || '';
+    expect(fixSection.split('**Problematic text:**').length).toBe(2); // appears exactly once in fix section
+    // Should pick the longer rewrittenCode
+    expect(result).toContain('{{ site_domain }}');
+  });
 });
 
 describe('formatOnDemandSummary', () => {

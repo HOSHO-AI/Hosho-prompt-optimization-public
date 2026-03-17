@@ -244,31 +244,86 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
   return md;
 }
 
+/**
+ * Group reverts with identical revertDetail line ranges (conservative dedup).
+ * Only merges when startLine AND endLine match exactly.
+ */
+function groupRevertsByLineRange(reverts: ChangeItem[]): ChangeItem[][] {
+  const groups: ChangeItem[][] = [];
+  const used = new Set<number>();
+
+  for (let i = 0; i < reverts.length; i++) {
+    if (used.has(i)) continue;
+    const group = [reverts[i]];
+    used.add(i);
+    const a = reverts[i].revertDetail;
+
+    if (a) {
+      for (let j = i + 1; j < reverts.length; j++) {
+        if (used.has(j)) continue;
+        const b = reverts[j].revertDetail;
+        if (b && a.startLine === b.startLine && a.endLine === b.endLine) {
+          group.push(reverts[j]);
+          used.add(j);
+        }
+      }
+    }
+
+    groups.push(group);
+  }
+  return groups;
+}
+
 function formatRevertSection(changeSummary?: ChangeItem[]): string {
   if (!changeSummary) return '';
   const reverts = changeSummary.filter(c => c.effect !== 'positive' && c.revert);
   if (reverts.length === 0) return '';
 
+  const groups = groupRevertsByLineRange(reverts);
+
   let md = '### SUGGESTED FIXES BEFORE MERGING\n\n';
-  for (let i = 0; i < reverts.length; i++) {
-    const item = reverts[i];
-    if (item.revertDetail) {
-      const d = item.revertDetail;
+  for (let g = 0; g < groups.length; g++) {
+    const group = groups[g];
+    const first = group[0];
+
+    if (first.revertDetail) {
+      const d = first.revertDetail;
       const lineRef = d.startLine === d.endLine ? `${d.startLine}` : `${d.startLine}-${d.endLine}`;
-      md += `**Fix ${i + 1}:** ${sanitizeInlineText(item.revert!)} *(line ${lineRef})*\n\n`;
-      if (d.suggestedFix.trim()) {
-        md += `${sanitizeInlineText(d.suggestedFix)}\n\n`;
+
+      if (group.length === 1) {
+        // Single item — render as before
+        md += `**Fix ${g + 1}:** ${sanitizeInlineText(first.revert!)} *(line ${lineRef})*\n\n`;
+        if (d.suggestedFix.trim()) {
+          md += `${sanitizeInlineText(d.suggestedFix)}\n\n`;
+        }
+      } else {
+        // Grouped — show first revert as title, list all reasons as bullets
+        md += `**Fix ${g + 1}:** ${sanitizeInlineText(first.revert!)} *(line ${lineRef})*\n\n`;
+        md += `This change was flagged by multiple quality factors:\n`;
+        for (const item of group) {
+          const cat = item.category ? `**${sanitizeInlineText(item.category)}**` : 'Review';
+          md += `- ${cat} — ${sanitizeInlineText(item.change)} — ${sanitizeInlineText(item.impact)}\n`;
+        }
+        md += '\n';
       }
+
       if (d.currentCode.trim()) {
         const codeFence = getCodeFence(d.currentCode);
         md += `**Problematic text:**\n\n${codeFence}\n${d.currentCode}\n${codeFence}\n\n`;
       }
-      if (d.rewrittenCode.trim()) {
-        const rewriteFence = getCodeFence(d.rewrittenCode);
-        md += `**Suggested fix:**\n\n${rewriteFence}\n${d.rewrittenCode}\n${rewriteFence}\n\n`;
+
+      // Pick the longest rewrittenCode from the group
+      const bestRewrite = group
+        .map(item => item.revertDetail?.rewrittenCode || '')
+        .filter(code => code.trim())
+        .sort((a, b) => b.length - a.length)[0];
+
+      if (bestRewrite) {
+        const rewriteFence = getCodeFence(bestRewrite);
+        md += `**Suggested fix:**\n\n${rewriteFence}\n${bestRewrite}\n${rewriteFence}\n\n`;
       }
     } else {
-      md += `**Fix ${i + 1}:** ${sanitizeInlineText(item.revert!)}\n\n`;
+      md += `**Fix ${g + 1}:** ${sanitizeInlineText(first.revert!)}\n\n`;
     }
   }
   return md;
