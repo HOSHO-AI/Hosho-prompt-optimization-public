@@ -123,23 +123,25 @@ function createMockComparison(overrides: Partial<ComparisonResult> = {}): Compar
 
 describe('formatPRComment', () => {
   it('includes the bot marker for deduplication', () => {
-    const result = formatPRComment([createMockComparison()], 42);
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).toContain(BOT_MARKER);
   });
 
-  it('includes PR review header with PR number and file path', () => {
-    const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('## PR Review: #42 → prompts/test-prompt.md');
+  it('includes PR review header with repo and PR number', () => {
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
+    expect(result).toContain('## PR Review: test-org/test-repo#42');
+    expect(result).toContain('**Scope:**');
+    expect(result).toContain('`prompts/test-prompt.md`');
   });
 
   it('does not include agent goal or target model in header', () => {
-    const result = formatPRComment([createMockComparison()], 42);
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).not.toContain('Agent goal:');
     expect(result).not.toContain('Target model:');
   });
 
   it('shows factor table with traffic light emojis', () => {
-    const result = formatPRComment([createMockComparison()], 42);
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).toContain('| Factor | Score |');
     expect(result).toContain('| Scope | 🟢 |');
     expect(result).toContain('| Prompt Injection Resistance | 🔴 |');
@@ -147,54 +149,53 @@ describe('formatPRComment', () => {
   });
 
   it('shows correct traffic light emojis based on scores', () => {
-    const result = formatPRComment([createMockComparison()], 42);
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).toContain('🟢'); // Score 9 (8+)
     expect(result).toContain('🟡'); // Score 6 (5-7)
     expect(result).toContain('🔴'); // Score 2 (1-4)
   });
 
   it('shows top 3 edits section with factor references', () => {
-    const result = formatPRComment([createMockComparison()], 42);
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).toContain('### TOP 3 EDITS TO FURTHER IMPROVE (BEYOND THIS PR)');
     expect(result).toContain('**User inputs lack delimiters**');
     expect(result).toContain('See Prompt Injection Resistance (1)');
   });
 
-  it('shows detailed findings section with collapsible factor headers', () => {
-    const result = formatPRComment([createMockComparison()], 42);
+  it('shows detailed findings section with factor headers', () => {
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).toContain('### APPENDIX: FURTHER PROMPT IMPROVEMENTS');
-    expect(result).toContain('<strong>Prompt Injection Resistance</strong>');
-    expect(result).toContain('<strong>Structure/Flow</strong>');
-    expect(result).toContain('<details><summary>');
-    expect(result).toContain('</details>');
+    expect(result).toContain('#### Prompt Injection Resistance');
+    expect(result).toContain('#### Structure/Flow');
+    expect(result).not.toContain('<details><summary>');
   });
 
   it('shows finding titles with line references', () => {
-    const result = formatPRComment([createMockComparison()], 42);
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).toContain('1. All user inputs injected without XML delimiters (line 45-52)');
     expect(result).toContain('2. No anti-injection instructions');
   });
 
-  it('shows existing prompt code snippets', () => {
-    const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('**Existing prompt:**');
+  it('shows problematic text code snippets', () => {
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
+    expect(result).toContain('**Problematic text:**');
     expect(result).toContain('requirements_spec: {requirements_spec}');
   });
 
-  it('shows suggested edit for findings', () => {
-    const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('**Suggested edit:**');
+  it('shows suggested fix for findings', () => {
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
+    expect(result).toContain('**Suggested fix:**');
     expect(result).toContain('Wrap all user inputs in XML tags when injected at runtime');
   });
 
   it('shows rewritten code for findings that have it', () => {
-    const result = formatPRComment([createMockComparison()], 42);
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).toContain('<user_input>{user_input}</user_input>');
   });
 
   it('shows APPROVE verdict when no negative changes in changeSummary', () => {
-    const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('### ✅ Approve This PR');
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
+    expect(result).toContain('**Verdict:** ✅ Approve This PR');
   });
 
   it('shows REJECT verdict when changeSummary has negative items', () => {
@@ -203,8 +204,8 @@ describe('formatPRComment', () => {
         { change: 'Removed §4 preservation rules', impact: 'lost rules', effect: 'negative', revert: 'Restore §4' },
       ],
     });
-    const result = formatPRComment([comp], 42);
-    expect(result).toContain('### ⛔ Request Changes');
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
+    expect(result).toContain('**Verdict:** ⛔ Request Changes');
   });
 
   it('shows what changed section when changeSummary is present', () => {
@@ -214,7 +215,7 @@ describe('formatPRComment', () => {
         { change: 'Removed §4 rules', impact: 'lost constraints', effect: 'negative', revert: 'Restore §4' },
       ],
     });
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
     expect(result).toContain('### WHAT\'S GOOD AND BAD IN THIS PR');
     expect(result).toContain('✅ XML tags on 5 variables');
     expect(result).toContain('⚠️ Removed §4 rules');
@@ -226,7 +227,7 @@ describe('formatPRComment', () => {
         { change: 'Removed §4 rules', impact: 'lost constraints', effect: 'negative', revert: 'Remove rule 6.3.6 — conflicts with §6.7' },
       ],
     });
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
     expect(result).toContain('### SUGGESTED FIXES BEFORE MERGING');
     expect(result).toContain('Remove rule 6.3.6');
     expect(result).not.toContain('Suggested approach');
@@ -250,16 +251,16 @@ describe('formatPRComment', () => {
         },
       ],
     });
-    const result = formatPRComment([comp], 42);
-    expect(result).toContain('<details><summary><strong>Fix 1:</strong> Remove rule 6.3.6');
-    expect(result).toContain('<em>(line 174)</em>');
-    expect(result).toContain('**Current prompt:**');
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
+    expect(result).toContain('**Fix 1:** Remove rule 6.3.6');
+    expect(result).toContain('*(line 174)*');
+    expect(result).toContain('**Problematic text:**');
     expect(result).toContain('Copy should be comprehensive');
-    expect(result).toContain('**Suggested fix:** Delete rule 6.3.6');
+    expect(result).toContain('Delete rule 6.3.6');
     expect(result).not.toContain('## 4)');
   });
 
-  it('shows collapsible revertDetail for structural regressions', () => {
+  it('shows revertDetail for structural regressions without collapsible', () => {
     const comp = createMockComparison({
       changeSummary: [
         {
@@ -277,14 +278,15 @@ describe('formatPRComment', () => {
         },
       ],
     });
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
     expect(result).toContain('### SUGGESTED FIXES BEFORE MERGING');
-    expect(result).toContain('<details><summary><strong>Fix 1:</strong> Restore §4 preservation constraints');
-    expect(result).toContain('<em>(line 100-106)</em>');
-    expect(result).toContain('**Current prompt:**');
+    expect(result).toContain('**Fix 1:** Restore §4 preservation constraints');
+    expect(result).toContain('*(line 100-106)*');
+    expect(result).toContain('**Problematic text:**');
     expect(result).toContain('### Pre-submission checklist:');
-    expect(result).toContain('**Suggested fix:** Re-add the three preservation rules');
+    expect(result).toContain('Re-add the three preservation rules');
     expect(result).toContain('## 4) Preservation rules');
+    expect(result).not.toContain('<details>');
   });
 
   it('does not show top edits section when no findings exist', () => {
@@ -317,13 +319,42 @@ describe('formatPRComment', () => {
         },
       ],
     });
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
     expect(result).not.toContain('### TOP 3 EDITS');
   });
 
   it('includes hosho bot footer', () => {
-    const result = formatPRComment([createMockComparison()], 42);
-    expect(result).toContain('*Hosho Bot — [hosho.ai](https://hosho.ai)*');
+    const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
+    expect(result).toContain('*Hosho Bot*');
+  });
+
+  it('renders diff snippet when diffSnippet is set', () => {
+    const comp = createMockComparison({
+      diffSnippet: '+14. **Sitemap:** When adding a new page',
+    });
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
+    expect(result).toContain('**The Change:**');
+    expect(result).toContain('+14. **Sitemap:** When adding a new page');
+  });
+
+  it('renders scopeSummary in scope line when set', () => {
+    const comp = createMockComparison({
+      scopeSummary: 'Added Rule 14 for sitemap updates',
+    });
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
+    expect(result).toContain('Added Rule 14 for sitemap updates');
+    expect(result).toContain('**Scope:**');
+  });
+
+  it('shows category prefix on changeSummary items', () => {
+    const comp = createMockComparison({
+      changeSummary: [
+        { change: 'Added sitemap rule', impact: 'fills gap', effect: 'positive', category: 'Scope' },
+      ],
+    });
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
+    expect(result).toContain('**Scope** —');
+    expect(result).toContain('Added sitemap rule');
   });
 });
 
@@ -454,7 +485,7 @@ describe('formatOnDemandSummary', () => {
     const result = formatOnDemandSummary(synthesis, factorResults);
     expect(result).toContain('### TOP 3 EDITS');
     expect(result).toContain('**No input delimiters**');
-    expect(result).toContain('<strong>Prompt Injection Resistance</strong>');
+    expect(result).toContain('#### Prompt Injection Resistance');
     expect(result).toContain('1. No input delimiters');
   });
 });
@@ -518,7 +549,7 @@ describe('Section Header Cleaning Integration', () => {
       ],
     });
 
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
 
     // Should NOT contain section header or horizontal rule
     expect(result).not.toContain('3) Requirements (strict)');
@@ -530,7 +561,7 @@ describe('Section Header Cleaning Integration', () => {
 
     // Uses new format
     expect(result).toContain('1. Must be concise vs comprehensive (line 45-52)');
-    expect(result).toContain('**Suggested edit:** Add priority order for constraints');
+    expect(result).toContain('**Suggested fix:** Add priority order for constraints');
   });
 
   it('preserves legitimate code that looks like headers', () => {
@@ -589,7 +620,7 @@ describe('Section Header Cleaning Integration', () => {
       ],
     });
 
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
 
     // SHOULD preserve lowercase numbered instructions (not headers)
     expect(result).toContain('1) analyze the input carefully');
@@ -653,7 +684,7 @@ describe('Section Header Cleaning Integration', () => {
       ],
     });
 
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
 
     // When all lines are headers, safety check returns original
     expect(result).toContain('## Instructions');
@@ -710,7 +741,7 @@ describe('Annotation Stripping and Title Restructuring', () => {
       }],
     });
 
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
 
     // Should NOT contain "(strict)" annotation or section header
     expect(result).not.toContain('3) Output (strict)');
@@ -769,13 +800,13 @@ describe('Annotation Stripping and Title Restructuring', () => {
       }],
     });
 
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
 
     // Title uses issue with line reference
     expect(result).toContain('1. Missing validation step (line 40-44)');
 
     // Suggested edit shows consideration
-    expect(result).toContain('**Suggested edit:** Add validation step');
+    expect(result).toContain('**Suggested fix:** Add validation step');
   });
 
   it('handles findings without code snippets (fallback to description)', () => {
@@ -814,13 +845,13 @@ describe('Annotation Stripping and Title Restructuring', () => {
       }],
     });
 
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
 
     // Should use description as title (no code snippet with issue)
     expect(result).toContain('1. Prompt has multiple unrelated goals');
 
     // Should show suggested edit
-    expect(result).toContain('**Suggested edit:** Split into separate prompts');
+    expect(result).toContain('**Suggested fix:** Split into separate prompts');
   });
 
   it('handles findings with empty issue field (fallback to description)', () => {
@@ -871,7 +902,7 @@ describe('Annotation Stripping and Title Restructuring', () => {
       }],
     });
 
-    const result = formatPRComment([comp], 42);
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
 
     // Should fallback to description as title (issue is empty)
     expect(result).toContain('1. Constraint lacks positive framing');

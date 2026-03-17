@@ -12,6 +12,7 @@ export interface ReviewAPIRequest {
   mode: 'pr' | 'on-demand';
   outputMode?: 'review' | 'improve';
   systemOverview?: string;
+  customPrinciples?: string;
   files: Array<{
     path: string;
     name: string;
@@ -27,6 +28,7 @@ export interface ReviewFileResult {
   targetModelFamily?: string;
   targetModelName?: string;
   changeSummary?: ChangeItem[];
+  scopeSummary?: string;
   factorResults: FactorEvaluationResult[];
   synthesis: SynthesisResult;
   comparison: ComparisonResult;

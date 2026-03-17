@@ -90,6 +90,7 @@ export interface ChangeItem {
   change: string;
   impact: string;
   effect: 'positive' | 'negative';
+  category?: string;
   revert?: string;
   revertDetail?: {
     currentCode: string;
@@ -118,6 +119,8 @@ export interface ComparisonResult {
   targetModelFamily?: string;
   targetModelName?: string;
   changeSummary?: ChangeItem[];
+  diffSnippet?: string;
+  scopeSummary?: string;
   synthesis: SynthesisResult;
   factorResults: FactorEvaluationResult[];
   deltas: FactorDelta[];

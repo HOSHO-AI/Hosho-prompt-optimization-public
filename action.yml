@@ -34,6 +34,10 @@ inputs:
     description: 'API call timeout in seconds'
     required: false
     default: '600'
+  custom_principles:
+    description: 'Path to markdown file with custom prompt review principles'
+    required: false
+    default: ''
   pr_number:
     description: 'PR number (required when triggered via issue_comment slash command)'
     required: false

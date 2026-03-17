@@ -113,6 +113,34 @@ function formatHeader(
   return md;
 }
 
+function formatScopeHeader(
+  comparisons: ComparisonResult[],
+  prNumber: number,
+  repoFullName: string,
+): string {
+  const fileCount = comparisons.length;
+  const fileList = comparisons.map(c => `\`${c.promptFile}\``).join(', ');
+
+  let md = `## PR Review: ${repoFullName}#${prNumber}\n\n`;
+
+  if (fileCount === 1) {
+    const summary = comparisons[0].scopeSummary;
+    md += summary
+      ? `**Scope:** ${summary} in ${fileList}\n\n`
+      : `**Scope:** 1 prompt change in ${fileList}\n\n`;
+  } else {
+    md += `**Scope:** ${fileCount} prompt changes in ${fileList}\n\n`;
+  }
+
+  return md;
+}
+
+function formatDiffSnippet(comp: ComparisonResult): string {
+  if (!comp.diffSnippet) return '';
+  const fence = getCodeFence(comp.diffSnippet);
+  return `**The Change:**\n\n${fence}diff\n${comp.diffSnippet}\n${fence}\n\n`;
+}
+
 function formatTable(
   factorResults: FactorEvaluationResult[],
   insights: FactorInsight[],
@@ -148,12 +176,12 @@ function formatTable(
 }
 
 function formatVerdict(changeSummary?: ChangeItem[]): string {
-  if (!changeSummary || changeSummary.length === 0) return '### ✅ Approve This PR\n\n';
+  if (!changeSummary || changeSummary.length === 0) return '**Verdict:** ✅ Approve This PR\n\n';
 
   const hasNegative = changeSummary.some(c => c.effect === 'negative');
 
-  if (hasNegative) return '### ⛔ Request Changes\n\n';
-  return '### ✅ Approve This PR\n\n';
+  if (hasNegative) return '**Verdict:** ⛔ Request Changes\n\n';
+  return '**Verdict:** ✅ Approve This PR\n\n';
 }
 
 function formatEditLine(tagged: TaggedFinding): string {
@@ -207,9 +235,10 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
   let md = '### WHAT\'S GOOD AND BAD IN THIS PR\n\n';
   for (const item of sorted) {
     const emoji = item.effect === 'positive' ? '✅' : '⚠️';
+    const categoryPrefix = item.category ? `**${sanitizeInlineText(item.category)}** — ` : '';
     const change = sanitizeInlineText(item.change);
     const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
-    md += `- ${emoji} ${change}${impact}\n`;
+    md += `- ${emoji} ${categoryPrefix}${change}${impact}\n`;
   }
   md += '\n';
   return md;
@@ -226,17 +255,18 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
     if (item.revertDetail) {
       const d = item.revertDetail;
       const lineRef = d.startLine === d.endLine ? `${d.startLine}` : `${d.startLine}-${d.endLine}`;
-      md += `<details><summary><strong>Fix ${i + 1}:</strong> ${sanitizeInlineText(item.revert!)} <em>(line ${lineRef})</em></summary>\n\n`;
+      md += `**Fix ${i + 1}:** ${sanitizeInlineText(item.revert!)} *(line ${lineRef})*\n\n`;
+      if (d.suggestedFix.trim()) {
+        md += `${sanitizeInlineText(d.suggestedFix)}\n\n`;
+      }
       if (d.currentCode.trim()) {
         const codeFence = getCodeFence(d.currentCode);
-        md += `**Current prompt:**\n\n${codeFence}\n${d.currentCode}\n${codeFence}\n\n`;
+        md += `**Problematic text:**\n\n${codeFence}\n${d.currentCode}\n${codeFence}\n\n`;
       }
-      md += `**Suggested fix:** ${sanitizeInlineText(d.suggestedFix)}\n\n`;
       if (d.rewrittenCode.trim()) {
         const rewriteFence = getCodeFence(d.rewrittenCode);
-        md += `${rewriteFence}\n${d.rewrittenCode}\n${rewriteFence}\n\n`;
+        md += `**Suggested fix:**\n\n${rewriteFence}\n${d.rewrittenCode}\n${rewriteFence}\n\n`;
       }
-      md += `</details>\n\n`;
     } else {
       md += `**Fix ${i + 1}:** ${sanitizeInlineText(item.revert!)}\n\n`;
     }
@@ -255,17 +285,21 @@ function formatFindingDetail(finding: Finding): string {
       : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
     md += `<h4>${finding.findingNumber}. ${title} (line ${lineRef})</h4>\n\n`;
 
+    if (finding.codeSnippet.issue) {
+      md += `${sanitizeInlineText(finding.codeSnippet.issue)}\n\n`;
+    }
+
     const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
     if (cleanedCode.trim()) {
       const codeFence = getCodeFence(cleanedCode);
-      md += `**Existing prompt:**\n\n`;
+      md += `**Problematic text:**\n\n`;
       md += `${codeFence}\n${cleanedCode}\n${codeFence}\n\n`;
     }
   } else {
     md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
   }
 
-  md += `**Suggested edit:** ${sanitizeInlineText(finding.consideration)}\n\n`;
+  md += `**Suggested fix:** ${sanitizeInlineText(finding.consideration)}\n\n`;
 
   if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
     const rewriteFence = getCodeFence(finding.rewrittenCode);
@@ -290,11 +324,10 @@ function formatAllFindings(
   }
 
   for (const insight of withFindings) {
-    md += `<details><summary><strong>${insight.factorName}</strong></summary>\n\n`;
+    md += `#### ${insight.factorName}\n\n`;
     for (const finding of insight.findings) {
       md += formatFindingDetail(finding);
     }
-    md += `</details>\n`;
   }
   md += `\n`;
 
@@ -332,18 +365,17 @@ export function formatOnDemandSummary(
 function formatPRFileSection(
   comp: ComparisonResult,
   prNumber: number,
+  isMultiFile: boolean,
 ): string {
   const enrichedInsights = mergeFindings(comp.synthesis.factorInsights, comp.factorResults);
 
-  let md = formatHeader(
-    comp.promptFile,
-    comp.synthesis.promptDescription,
-    comp.targetModelFamily,
-    comp.targetModelName,
-    prNumber,
-  );
+  let md = '';
+  if (isMultiFile) {
+    md += `### ${comp.promptFile}\n\n`;
+  }
 
-  // Verdict (based on changeSummary)
+  // Diff snippet + Verdict
+  md += formatDiffSnippet(comp);
   md += formatVerdict(comp.changeSummary);
 
   // What changed in this PR
@@ -380,12 +412,15 @@ function formatPRFileSection(
 export function formatPRComment(
   comparisons: ComparisonResult[],
   prNumber: number,
+  repoFullName: string = '',
 ): string {
   let md = `${BOT_MARKER}\n`;
+  md += formatScopeHeader(comparisons, prNumber, repoFullName);
 
+  const isMultiFile = comparisons.length > 1;
   for (const comp of comparisons) {
-    md += formatPRFileSection(comp, prNumber);
-    if (comparisons.length > 1) md += `\n---\n\n`;
+    md += formatPRFileSection(comp, prNumber, isMultiFile);
+    if (isMultiFile) md += `\n---\n\n`;
   }
 
   // Truncate if needed
@@ -401,12 +436,15 @@ export function formatPRComment(
 export function formatJobSummary(
   comparisons: ComparisonResult[],
   prNumber: number,
+  repoFullName: string = '',
 ): string {
   let md = '';
+  md += formatScopeHeader(comparisons, prNumber, repoFullName);
 
+  const isMultiFile = comparisons.length > 1;
   for (const comp of comparisons) {
-    md += formatPRFileSection(comp, prNumber);
-    if (comparisons.length > 1) md += `\n---\n\n`;
+    md += formatPRFileSection(comp, prNumber, isMultiFile);
+    if (isMultiFile) md += `\n---\n\n`;
   }
 
   return md;
@@ -417,14 +455,13 @@ export function formatJobSummary(
 function formatReviewFileSection(
   comp: ComparisonResult,
   prNumber: number,
+  isMultiFile: boolean,
 ): string {
-  let md = formatHeader(
-    comp.promptFile,
-    comp.synthesis.promptDescription,
-    comp.targetModelFamily,
-    comp.targetModelName,
-    prNumber,
-  );
+  let md = '';
+  if (isMultiFile) {
+    md += `### ${comp.promptFile}\n\n`;
+  }
+  md += formatDiffSnippet(comp);
   md += formatVerdict(comp.changeSummary);
   md += formatWhatChanged(comp.changeSummary);
   md += formatRevertSection(comp.changeSummary);
@@ -434,12 +471,15 @@ function formatReviewFileSection(
 export function formatReviewComment(
   comparisons: ComparisonResult[],
   prNumber: number,
+  repoFullName: string = '',
 ): string {
   let md = `${BOT_MARKER}\n`;
+  md += formatScopeHeader(comparisons, prNumber, repoFullName);
 
+  const isMultiFile = comparisons.length > 1;
   for (const comp of comparisons) {
-    md += formatReviewFileSection(comp, prNumber);
-    if (comparisons.length > 1) md += `\n---\n\n`;
+    md += formatReviewFileSection(comp, prNumber, isMultiFile);
+    if (isMultiFile) md += `\n---\n\n`;
   }
 
   if (md.length > PR_COMMENT_MAX_LENGTH) {
@@ -455,12 +495,15 @@ export function formatReviewComment(
 export function formatReviewJobSummary(
   comparisons: ComparisonResult[],
   prNumber: number,
+  repoFullName: string = '',
 ): string {
   let md = '';
+  md += formatScopeHeader(comparisons, prNumber, repoFullName);
 
+  const isMultiFile = comparisons.length > 1;
   for (const comp of comparisons) {
-    md += formatReviewFileSection(comp, prNumber);
-    if (comparisons.length > 1) md += `\n---\n\n`;
+    md += formatReviewFileSection(comp, prNumber, isMultiFile);
+    if (isMultiFile) md += `\n---\n\n`;
   }
 
   md += `\n<p align="center"><b>Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</b></p>\n\n`;

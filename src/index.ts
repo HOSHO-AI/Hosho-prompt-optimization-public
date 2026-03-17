@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { basename } from 'path';
 import { readFileSync } from 'fs';
+import { createTwoFilesPatch } from 'diff';
 import { identifyChangedPromptFiles } from './file-identifier';
 import { fetchFileVersions, fetchFileFromDisk } from './file-fetcher';
 import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
@@ -15,6 +16,36 @@ import {
 } from './output-formatter';
 import { ComparisonResult } from './types';
 
+/**
+ * Strip boilerplate from custom principles file: HTML comments and # headings.
+ * Returns empty string if only boilerplate remains.
+ */
+function stripPrinciplesBoilerplate(raw: string): string {
+  return raw
+    .replace(/<!--[\s\S]*?-->/g, '')  // Remove HTML comments (including multiline)
+    .split('\n')
+    .filter(line => !line.trimStart().startsWith('#'))  // Remove heading lines
+    .join('\n')
+    .trim();
+}
+
+/**
+ * Compute a compact diff snippet showing only +/- lines, truncated.
+ */
+function computeDiffSnippet(before: string | null, after: string, maxLines = 15): string {
+  if (!before) return '';
+  const patch = createTwoFilesPatch('before', 'after', before, after, '', '', { context: 0 });
+  const lines = patch.split('\n');
+  const diffLines = lines
+    .filter(l => l.startsWith('+') || l.startsWith('-'))
+    .filter(l => !l.startsWith('+++') && !l.startsWith('---'));
+  if (diffLines.length === 0) return '';
+  const truncated = diffLines.slice(0, maxLines);
+  let result = truncated.join('\n');
+  if (diffLines.length > maxLines) result += `\n... (${diffLines.length - maxLines} more lines)`;
+  return result;
+}
+
 async function run(): Promise<void> {
   try {
     // Read inputs
@@ -25,6 +56,7 @@ async function run(): Promise<void> {
     const promptPath = core.getInput('prompt_path');
     const systemOverviewPath = core.getInput('system_overview');
     const timeoutMs = parseInt(core.getInput('timeout') || '180', 10) * 1000;
+    const customPrinciplesPath = core.getInput('custom_principles');
     const prNumberInput = core.getInput('pr_number');
 
     // Mask the API key in logs
@@ -39,6 +71,23 @@ async function run(): Promise<void> {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         core.warning(`System overview file not found at ${systemOverviewPath}: ${message}. Continuing without it.`);
+      }
+    }
+
+    // Read custom principles file if provided (strip boilerplate headings + comments)
+    let customPrinciples = '';
+    if (customPrinciplesPath) {
+      try {
+        const raw = readFileSync(customPrinciplesPath, 'utf-8');
+        customPrinciples = stripPrinciplesBoilerplate(raw);
+        if (customPrinciples) {
+          core.info(`Loaded custom principles from ${customPrinciplesPath}`);
+        } else {
+          core.info(`Custom principles file at ${customPrinciplesPath} contains only boilerplate — skipping.`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        core.warning(`Custom principles file not found at ${customPrinciplesPath}: ${message}. Continuing without it.`);
       }
     }
 
@@ -61,7 +110,7 @@ async function run(): Promise<void> {
           'or prompt_path for directory prefix matching (e.g. "prompts/").'
         );
       }
-      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, timeoutMs, prNumberInput, outputMode);
+      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode);
     } else {
       await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
     }
@@ -79,6 +128,7 @@ async function runPRMode(
   filePattern: string,
   promptPath: string,
   systemOverview: string,
+  customPrinciples: string,
   timeoutMs: number,
   prNumberInput?: string,
   outputMode: 'review' | 'improve' = 'review',
@@ -170,6 +220,7 @@ async function runPRMode(
         mode: 'pr',
         outputMode,
         systemOverview: systemOverview || undefined,
+        customPrinciples: customPrinciples || undefined,
         files: [file],
         metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber, prTitle, prDescription },
       }, timeoutMs);
@@ -209,6 +260,18 @@ async function runPRMode(
     changeSummary: r.changeSummary,
   }));
 
+  // Attach diff snippets and scopeSummary to comparisons
+  for (const comp of comparisons) {
+    const file = apiFiles.find(f => f.path === comp.promptFile);
+    if (file && file.before) {
+      comp.diffSnippet = computeDiffSnippet(file.before, file.after);
+    }
+    const result = allResults.find(r => r.file === comp.promptFile);
+    if (result?.scopeSummary) {
+      comp.scopeSummary = result.scopeSummary;
+    }
+  }
+
   // Normalize after JSON round-trip (undefined fields get stripped by JSON.stringify)
   for (const comp of comparisons) {
     for (const insight of comp.synthesis.factorInsights) {
@@ -221,17 +284,18 @@ async function runPRMode(
   }
 
   // Step 5: Post PR comment
+  const repoFullName = `${owner}/${repo}`;
   core.info(`Posting PR ${outputMode === 'review' ? 'review' : 'improve'} comment...`);
   const commentBody = outputMode === 'review'
-    ? formatReviewComment(comparisons, pullNumber)
-    : formatPRComment(comparisons, pullNumber);
+    ? formatReviewComment(comparisons, pullNumber, repoFullName)
+    : formatPRComment(comparisons, pullNumber, repoFullName);
   await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
 
   // Step 6: Write Job Summary
   core.info('Writing Job Summary...');
   const summaryBody = outputMode === 'review'
-    ? formatReviewJobSummary(comparisons, pullNumber)
-    : formatJobSummary(comparisons, pullNumber);
+    ? formatReviewJobSummary(comparisons, pullNumber, repoFullName)
+    : formatJobSummary(comparisons, pullNumber, repoFullName);
   await core.summary.addRaw(summaryBody).write();
 
   // Step 8: Set outputs
