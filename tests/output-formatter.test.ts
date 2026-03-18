@@ -198,14 +198,24 @@ describe('formatPRComment', () => {
     expect(result).toContain('**Verdict:** ✅ Approve This PR');
   });
 
-  it('shows REJECT verdict when changeSummary has negative items', () => {
+  it('shows REJECT verdict when changeSummary has critical negative items', () => {
     const comp = createMockComparison({
       changeSummary: [
-        { change: 'Removed §4 preservation rules', impact: 'lost rules', effect: 'negative', revert: 'Restore §4' },
+        { change: 'Removed Section 4 rules', impact: 'lost rules', effect: 'negative', severity: 'critical', revert: 'Restore Section 4' },
       ],
     });
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
     expect(result).toContain('**Verdict:** ⛔ Request Changes');
+  });
+
+  it('shows APPROVE with suggestions when changeSummary has only suggestion-severity negatives', () => {
+    const comp = createMockComparison({
+      changeSummary: [
+        { change: 'Uses negative framing', impact: 'style issue', effect: 'negative', severity: 'suggestion', revert: 'Rewrite as positive' },
+      ],
+    });
+    const result = formatPRComment([comp], 42, 'test-org/test-repo');
+    expect(result).toContain('**Verdict:** ✅ Approve — with suggestions');
   });
 
   it('shows what changed section when changeSummary is present', () => {
@@ -218,7 +228,7 @@ describe('formatPRComment', () => {
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
     expect(result).toContain('### WHAT\'S GOOD AND BAD IN THIS PR');
     expect(result).toContain('✅ XML tags on 5 variables');
-    expect(result).toContain('⚠️ Removed §4 rules');
+    expect(result).toContain('Removed §4 rules');
   });
 
   it('shows revert section without details when no revertDetail provided', () => {
@@ -252,7 +262,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
-    expect(result).toContain('**Fix 1:** Remove rule 6.3.6');
+    expect(result).toContain('**Suggestion 1:** Remove rule 6.3.6');
     expect(result).toContain('*(line 174)*');
     expect(result).toContain('**Problematic text:**');
     expect(result).toContain('Copy should be comprehensive');
@@ -280,7 +290,7 @@ describe('formatPRComment', () => {
     });
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
     expect(result).toContain('### SUGGESTED FIXES BEFORE MERGING');
-    expect(result).toContain('**Fix 1:** Restore §4 preservation constraints');
+    expect(result).toContain('**Suggestion 1:** Restore §4 preservation constraints');
     expect(result).toContain('*(line 100-106)*');
     expect(result).toContain('**Problematic text:**');
     expect(result).toContain('### Pre-submission checklist:');
@@ -380,8 +390,8 @@ describe('formatPRComment', () => {
     });
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
     // Should show ONE fix block, not two
-    expect(result).toContain('**Fix 1:**');
-    expect(result).not.toContain('**Fix 2:**');
+    expect(result).toContain('**Suggestion 1:**');
+    expect(result).not.toContain('**Suggestion 2:**');
     // Should list both reasons
     expect(result).toContain('**Constraints**');
     expect(result).toContain('**Context & Guidance**');

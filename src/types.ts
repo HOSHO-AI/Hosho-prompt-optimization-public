@@ -90,6 +90,7 @@ export interface ChangeItem {
   change: string;
   impact: string;
   effect: 'positive' | 'negative';
+  severity?: 'critical' | 'suggestion';
   category?: string;
   revert?: string;
   revertDetail?: {

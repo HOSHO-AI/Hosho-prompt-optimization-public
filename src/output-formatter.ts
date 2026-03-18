@@ -178,9 +178,12 @@ function formatTable(
 function formatVerdict(changeSummary?: ChangeItem[]): string {
   if (!changeSummary || changeSummary.length === 0) return '**Verdict:** ✅ Approve This PR\n\n';
 
-  const hasNegative = changeSummary.some(c => c.effect === 'negative');
+  const hasCritical = changeSummary.some(c => c.effect === 'negative' && c.severity === 'critical');
+  if (hasCritical) return '**Verdict:** ⛔ Request Changes\n\n';
 
-  if (hasNegative) return '**Verdict:** ⛔ Request Changes\n\n';
+  const hasSuggestions = changeSummary.some(c => c.effect === 'negative');
+  if (hasSuggestions) return '**Verdict:** ✅ Approve — with suggestions\n\n';
+
   return '**Verdict:** ✅ Approve This PR\n\n';
 }
 
@@ -234,7 +237,8 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
 
   let md = '### WHAT\'S GOOD AND BAD IN THIS PR\n\n';
   for (const item of sorted) {
-    const emoji = item.effect === 'positive' ? '✅' : '⚠️';
+    const emoji = item.effect === 'positive' ? '✅'
+      : item.severity === 'critical' ? '⛔' : '💡';
     const categoryPrefix = item.category ? `**${sanitizeInlineText(item.category)}** — ` : '';
     const change = sanitizeInlineText(item.change);
     const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
@@ -289,16 +293,18 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
     if (first.revertDetail) {
       const d = first.revertDetail;
       const lineRef = d.startLine === d.endLine ? `${d.startLine}` : `${d.startLine}-${d.endLine}`;
+      const hasCriticalInGroup = group.some(item => item.severity === 'critical');
+      const fixLabel = hasCriticalInGroup ? `Fix ${g + 1}` : `Suggestion ${g + 1}`;
 
       if (group.length === 1) {
         // Single item — render as before
-        md += `**Fix ${g + 1}:** ${sanitizeInlineText(first.revert!)} *(line ${lineRef})*\n\n`;
+        md += `**${fixLabel}:** ${sanitizeInlineText(first.revert!)} *(line ${lineRef})*\n\n`;
         if (d.suggestedFix.trim()) {
           md += `${sanitizeInlineText(d.suggestedFix)}\n\n`;
         }
       } else {
         // Grouped — show first revert as title, list all reasons as bullets
-        md += `**Fix ${g + 1}:** ${sanitizeInlineText(first.revert!)} *(line ${lineRef})*\n\n`;
+        md += `**${fixLabel}:** ${sanitizeInlineText(first.revert!)} *(line ${lineRef})*\n\n`;
         md += `This change was flagged by multiple quality factors:\n`;
         for (const item of group) {
           const cat = item.category ? `**${sanitizeInlineText(item.category)}**` : 'Review';
@@ -323,7 +329,8 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
         md += `**Suggested fix:**\n\n${rewriteFence}\n${bestRewrite}\n${rewriteFence}\n\n`;
       }
     } else {
-      md += `**Fix ${g + 1}:** ${sanitizeInlineText(first.revert!)}\n\n`;
+      const simpleLabel = first.severity === 'critical' ? `Fix ${g + 1}` : `Suggestion ${g + 1}`;
+      md += `**${simpleLabel}:** ${sanitizeInlineText(first.revert!)}\n\n`;
     }
   }
   return md;
