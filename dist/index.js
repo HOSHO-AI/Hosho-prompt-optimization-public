@@ -898,7 +898,8 @@ function formatEditLine(tagged) {
     else {
         line = `**${sanitizeInlineText(title)}**`;
     }
-    return `${line} — See ${tagged.factorName} (${f.findingNumber})`;
+    const anchorLink = `#${tagged.factorId}-${f.findingNumber}`;
+    return `${line} — [See ${tagged.factorName} (${f.findingNumber})](${anchorLink})`;
 }
 function formatTopEdits(tagged, limit = 3) {
     if (tagged.length === 0)
@@ -1009,14 +1010,15 @@ function formatRevertSection(changeSummary) {
     }
     return md;
 }
-function formatFindingDetail(finding) {
+function formatFindingDetail(finding, factorId) {
     let md = '';
+    const anchorId = factorId ? `${factorId}-${finding.findingNumber}` : '';
     const title = finding.codeSnippet?.issue || finding.description;
     if (finding.codeSnippet && finding.codeSnippet.code.trim()) {
         const lineRef = finding.codeSnippet.startLine === finding.codeSnippet.endLine
             ? `${finding.codeSnippet.startLine}`
             : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
-        md += `<h4>${finding.findingNumber}. ${title} (line ${lineRef})</h4>\n\n`;
+        md += `<h4${anchorId ? ` id="${anchorId}"` : ''}>${finding.findingNumber}. ${title} (line ${lineRef})</h4>\n\n`;
         if (finding.codeSnippet.issue) {
             md += `${sanitizeInlineText(finding.codeSnippet.issue)}\n\n`;
         }
@@ -1028,7 +1030,7 @@ function formatFindingDetail(finding) {
         }
     }
     else {
-        md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
+        md += `<h4${anchorId ? ` id="${anchorId}"` : ''}>${finding.findingNumber}. ${title}</h4>\n\n`;
     }
     md += `**Suggested fix:** ${sanitizeInlineText(finding.consideration)}\n\n`;
     if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
@@ -1050,14 +1052,14 @@ function formatAllFindings(insights, tableContent, customPrinciplesResult) {
     for (const insight of withFindings) {
         md += `#### ${insight.factorName}\n\n`;
         for (const finding of insight.findings) {
-            md += formatFindingDetail(finding);
+            md += formatFindingDetail(finding, insight.factorId);
         }
     }
     // Custom principles findings (separate from standard 6 factors)
     if (hasCustomFindings) {
         md += `#### Custom Principles\n\n`;
         for (const finding of customPrinciplesResult.findings) {
-            md += formatFindingDetail(finding);
+            md += formatFindingDetail(finding, 'custom-principles');
         }
     }
     md += `\n`;
