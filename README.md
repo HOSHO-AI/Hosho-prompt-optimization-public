@@ -121,7 +121,8 @@ jobs:
           file_pattern: '**/*system-prompt*.md'
           prompt_file: ${{ github.event.inputs.prompt_file || '' }}
           pr_number: ${{ steps.pr_details.outputs.pr_number || '' }}
-          # system_overview: docs/system-overview.md   # Optional — see step 4
+          # system_overview: docs/system-overview.md       # Optional — see step 4
+          # custom_principles: docs/prompt-principles.md   # Optional — see step 5
 ```
 
 That's it — one file handles PR reviews, slash commands, and on-demand reviews. Every PR that changes matching files gets an automated review comment. You can also comment `/hosho-improve` on a PR for detailed scoring, or run manually from the Actions tab to evaluate any prompt file on demand.
@@ -173,7 +174,35 @@ Example format:
 User → Requirements Gatherer → Planner → Builder → Reviewer → User
 ```
 
-### 5. Using on-demand mode
+### 5. (Optional) Add custom review principles
+
+If your team has specific prompt engineering standards, create a markdown file listing them and pass it via the `custom_principles` input. The reviewer will evaluate PR diffs against these principles in addition to the standard 6-factor review.
+
+Write each principle as a numbered item — short, actionable, and specific to your team's conventions:
+
+```markdown
+# Prompt Review Principles
+
+1. Clear & unambiguous with minimal tokens
+2. Each agent does one thing (single responsibility)
+3. Standard 3-part structure: Role, Context, Instructions
+4. Use positive instructions over negative ones ("do X" not "don't do Y")
+5. Design for prompt caching — keep stable content at the top
+```
+
+Add the input to your workflow:
+
+```yaml
+      - uses: HOSHO-AI/Hosho-prompt-optimization-public@v1
+        with:
+          api_key: ${{ secrets.HOSHO_API_KEY }}
+          file_pattern: '**/*system-prompt*.md'
+          custom_principles: 'docs/prompt-principles.md'
+```
+
+Custom principles only activate in PR mode (when a diff exists). Findings from custom principles are deduplicated against the standard review — no redundant feedback.
+
+### 6. Using on-demand mode
 
 On-demand mode is already included in the workflow above via the `workflow_dispatch` trigger. To run it: go to the **Actions** tab in your GitHub repo → select **Hosho Prompt Review** → click **Run workflow** → enter the path to your prompt file → click the green **Run workflow** button. Results appear in the Job Summary for that run.
 
@@ -194,6 +223,7 @@ On-demand mode is already included in the workflow above via the `workflow_dispa
 | `file_pattern` | No | `''` | Glob pattern(s) for identifying prompt files in PRs. Supports comma-separated patterns (e.g. `**/*system-prompt*.md, **/*user-prompt*.md`) |
 | `prompt_path` | No | `''` | Directory prefix for identifying prompt files in PRs (e.g. `prompts/`). Alternative to `file_pattern` |
 | `system_overview` | No | `''` | Path to a system overview markdown file |
+| `custom_principles` | No | `''` | Path to a markdown file with team-specific prompt review principles |
 | `api_url` | No | Built-in | API endpoint URL — override for enterprise/self-hosted deployments |
 | `timeout` | No | `600` | API call timeout in seconds |
 | `pr_number` | No | `''` | PR number — set automatically when using slash commands (see workflow above) |

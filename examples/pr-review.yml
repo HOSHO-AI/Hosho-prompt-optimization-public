@@ -85,4 +85,5 @@ jobs:
           file_pattern: '**/*system-prompt*.md'   # Option A
           # prompt_path: prompts/                  # Option B
           pr_number: ${{ steps.pr_details.outputs.pr_number || '' }}
-          # system_overview: docs/system-overview.md   # Optional — see step 4 in README
+          # system_overview: docs/system-overview.md       # Optional — see step 4 in README
+          # custom_principles: docs/prompt-principles.md   # Optional — see step 5 in README
