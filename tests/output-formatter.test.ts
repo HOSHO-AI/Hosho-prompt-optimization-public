@@ -262,7 +262,7 @@ describe('formatPRComment', () => {
       ],
     });
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
-    expect(result).toContain('**Suggestion 1:** Remove rule 6.3.6');
+    expect(result).toContain('**Suggested fix 1: Remove rule 6.3.6');
     expect(result).toContain('*(line 174)*');
     expect(result).toContain('**Problematic text:**');
     expect(result).toContain('Copy should be comprehensive');
@@ -290,7 +290,7 @@ describe('formatPRComment', () => {
     });
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
     expect(result).toContain('### SUGGESTED FIXES BEFORE MERGING');
-    expect(result).toContain('**Suggestion 1:** Restore §4 preservation constraints');
+    expect(result).toContain('**Suggested fix 1: Restore §4 preservation constraints');
     expect(result).toContain('*(line 100-106)*');
     expect(result).toContain('**Problematic text:**');
     expect(result).toContain('### Pre-submission checklist:');
@@ -390,8 +390,8 @@ describe('formatPRComment', () => {
     });
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
     // Should show ONE fix block, not two
-    expect(result).toContain('**Suggestion 1:**');
-    expect(result).not.toContain('**Suggestion 2:**');
+    expect(result).toContain('**Suggested fix 1:');
+    expect(result).not.toContain('**Suggested fix 2:');
     // Should list both reasons
     expect(result).toContain('**Constraints**');
     expect(result).toContain('**Context & Guidance**');
