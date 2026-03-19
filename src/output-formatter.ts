@@ -5,6 +5,7 @@ import {
   FactorEvaluationResult,
   FactorInsight,
   Finding,
+  CustomPrinciplesResult,
 } from './types';
 
 const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
@@ -144,6 +145,7 @@ function formatDiffSnippet(comp: ComparisonResult): string {
 function formatTable(
   factorResults: FactorEvaluationResult[],
   insights: FactorInsight[],
+  customPrinciplesResult?: CustomPrinciplesResult,
 ): string {
   const isPRMode = insights.some(f => f.changeDirection);
 
@@ -168,6 +170,17 @@ function formatTable(
     } else {
       const rationale = sanitizeInlineText(factor.tableRationale || '—');
       md += `\n| ${factor.factorName} | ${emoji} | ${rationale} |`;
+    }
+  }
+
+  // Custom principles row (if present — separate from standard 6 factors)
+  if (customPrinciplesResult && customPrinciplesResult.score > 0) {
+    const emoji = getTrafficLightEmoji(customPrinciplesResult.score);
+    const rationale = sanitizeInlineText(customPrinciplesResult.tableRationale || '—');
+    if (isPRMode) {
+      md += `\n| Custom Principles | — | ${emoji} | ${rationale} |`;
+    } else {
+      md += `\n| Custom Principles | ${emoji} | ${rationale} |`;
     }
   }
 
@@ -375,9 +388,11 @@ function formatFindingDetail(finding: Finding): string {
 function formatAllFindings(
   insights: FactorInsight[],
   tableContent?: string,
+  customPrinciplesResult?: CustomPrinciplesResult,
 ): string {
   const withFindings = insights.filter(f => f.findings.length > 0);
-  if (withFindings.length === 0 && !tableContent) return '';
+  const hasCustomFindings = customPrinciplesResult && customPrinciplesResult.findings.length > 0;
+  if (withFindings.length === 0 && !tableContent && !hasCustomFindings) return '';
 
   let md = `---\n### APPENDIX: FURTHER PROMPT IMPROVEMENTS\n\n`;
 
@@ -391,6 +406,15 @@ function formatAllFindings(
       md += formatFindingDetail(finding);
     }
   }
+
+  // Custom principles findings (separate from standard 6 factors)
+  if (hasCustomFindings) {
+    md += `#### Custom Principles\n\n`;
+    for (const finding of customPrinciplesResult!.findings) {
+      md += formatFindingDetail(finding);
+    }
+  }
+
   md += `\n`;
 
   return md;
@@ -465,8 +489,8 @@ function formatPRFileSection(
   }
 
   // Collapsed detail (table + ALL findings)
-  const tableContent = formatTable(comp.factorResults, enrichedInsights);
-  md += formatAllFindings(enrichedInsights, tableContent);
+  const tableContent = formatTable(comp.factorResults, enrichedInsights, comp.customPrinciplesResult);
+  md += formatAllFindings(enrichedInsights, tableContent, comp.customPrinciplesResult);
 
   return md;
 }

@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { ComparisonResult, ChangeItem, FactorEvaluationResult, SynthesisResult } from './types';
+import { ComparisonResult, ChangeItem, FactorEvaluationResult, SynthesisResult, CustomPrinciplesResult } from './types';
 
 const DEFAULT_API_URL = 'https://2pdp5lkd4g5a4hi3aigcdxighe0ebgjy.lambda-url.us-east-1.on.aws/';
 const MAX_RETRIES = 3;
@@ -32,6 +32,7 @@ export interface ReviewFileResult {
   factorResults: FactorEvaluationResult[];
   synthesis: SynthesisResult;
   comparison: ComparisonResult;
+  customPrinciplesResult?: CustomPrinciplesResult;
 }
 
 export interface ReviewAPIResponse {

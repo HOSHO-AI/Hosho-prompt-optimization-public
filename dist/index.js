@@ -560,6 +560,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         targetModelFamily: r.targetModelFamily,
         targetModelName: r.targetModelName,
         changeSummary: r.changeSummary,
+        customPrinciplesResult: r.customPrinciplesResult,
     }));
     // Attach diff snippets and scopeSummary to comparisons
     for (const comp of comparisons) {
@@ -822,7 +823,7 @@ function formatDiffSnippet(comp) {
     const fence = getCodeFence(comp.diffSnippet);
     return `**The Change:**\n\n${fence}diff\n${comp.diffSnippet}\n${fence}\n\n`;
 }
-function formatTable(factorResults, insights) {
+function formatTable(factorResults, insights, customPrinciplesResult) {
     const isPRMode = insights.some(f => f.changeDirection);
     let md = '';
     if (isPRMode) {
@@ -845,6 +846,17 @@ function formatTable(factorResults, insights) {
         else {
             const rationale = sanitizeInlineText(factor.tableRationale || '—');
             md += `\n| ${factor.factorName} | ${emoji} | ${rationale} |`;
+        }
+    }
+    // Custom principles row (if present — separate from standard 6 factors)
+    if (customPrinciplesResult && customPrinciplesResult.score > 0) {
+        const emoji = getTrafficLightEmoji(customPrinciplesResult.score);
+        const rationale = sanitizeInlineText(customPrinciplesResult.tableRationale || '—');
+        if (isPRMode) {
+            md += `\n| Custom Principles | — | ${emoji} | ${rationale} |`;
+        }
+        else {
+            md += `\n| Custom Principles | ${emoji} | ${rationale} |`;
         }
     }
     md += '\n\n';
@@ -1026,9 +1038,10 @@ function formatFindingDetail(finding) {
     md += `---\n\n`;
     return md;
 }
-function formatAllFindings(insights, tableContent) {
+function formatAllFindings(insights, tableContent, customPrinciplesResult) {
     const withFindings = insights.filter(f => f.findings.length > 0);
-    if (withFindings.length === 0 && !tableContent)
+    const hasCustomFindings = customPrinciplesResult && customPrinciplesResult.findings.length > 0;
+    if (withFindings.length === 0 && !tableContent && !hasCustomFindings)
         return '';
     let md = `---\n### APPENDIX: FURTHER PROMPT IMPROVEMENTS\n\n`;
     if (tableContent) {
@@ -1037,6 +1050,13 @@ function formatAllFindings(insights, tableContent) {
     for (const insight of withFindings) {
         md += `#### ${insight.factorName}\n\n`;
         for (const finding of insight.findings) {
+            md += formatFindingDetail(finding);
+        }
+    }
+    // Custom principles findings (separate from standard 6 factors)
+    if (hasCustomFindings) {
+        md += `#### Custom Principles\n\n`;
+        for (const finding of customPrinciplesResult.findings) {
             md += formatFindingDetail(finding);
         }
     }
@@ -1088,8 +1108,8 @@ function formatPRFileSection(comp, prNumber, isMultiFile) {
         md += formatTopEdits(top3Candidates, 3);
     }
     // Collapsed detail (table + ALL findings)
-    const tableContent = formatTable(comp.factorResults, enrichedInsights);
-    md += formatAllFindings(enrichedInsights, tableContent);
+    const tableContent = formatTable(comp.factorResults, enrichedInsights, comp.customPrinciplesResult);
+    md += formatAllFindings(enrichedInsights, tableContent, comp.customPrinciplesResult);
     return md;
 }
 function formatPRComment(comparisons, prNumber, repoFullName = '') {

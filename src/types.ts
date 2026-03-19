@@ -102,6 +102,15 @@ export interface ChangeItem {
   };
 }
 
+// ---- Custom Principles Result (improve mode) ----
+
+export interface CustomPrinciplesResult {
+  score: number;
+  scoreLabel: string;
+  tableRationale: string;
+  findings: Finding[];
+}
+
 // ---- Comparison Types ----
 
 export interface FactorDelta {
@@ -128,6 +137,7 @@ export interface ComparisonResult {
   hasRegression: boolean;
   hasCriticalIssue: boolean;
   promptContent?: string;
+  customPrinciplesResult?: CustomPrinciplesResult;
 }
 
 // ---- File Types ----

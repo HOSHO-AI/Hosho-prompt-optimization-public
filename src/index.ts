@@ -258,6 +258,7 @@ async function runPRMode(
     targetModelFamily: r.targetModelFamily,
     targetModelName: r.targetModelName,
     changeSummary: r.changeSummary,
+    customPrinciplesResult: r.customPrinciplesResult,
   }));
 
   // Attach diff snippets and scopeSummary to comparisons
