@@ -1020,7 +1020,7 @@ function formatFindingDetail(finding, factorId) {
             : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
         if (anchorId)
             md += `<a name="${anchorId}"></a>\n`;
-        md += `<h4>${finding.findingNumber}. ${title} (line ${lineRef})</h4>\n\n`;
+        md += `<h4><u>${finding.findingNumber}. ${title} (line ${lineRef})</u></h4>\n\n`;
         if (finding.codeSnippet.issue) {
             md += `${sanitizeInlineText(finding.codeSnippet.issue)}\n\n`;
         }
@@ -1034,7 +1034,7 @@ function formatFindingDetail(finding, factorId) {
     else {
         if (anchorId)
             md += `<a name="${anchorId}"></a>\n`;
-        md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
+        md += `<h4><u>${finding.findingNumber}. ${title}</u></h4>\n\n`;
     }
     md += `**Suggested fix:** ${sanitizeInlineText(finding.consideration)}\n\n`;
     if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
@@ -1054,14 +1054,14 @@ function formatAllFindings(insights, tableContent, customPrinciplesResult) {
         md += tableContent;
     }
     for (const insight of withFindings) {
-        md += `#### ${insight.factorName}\n\n`;
+        md += `#### ${insight.factorName.toUpperCase()}\n\n`;
         for (const finding of insight.findings) {
             md += formatFindingDetail(finding, insight.factorId);
         }
     }
     // Custom principles findings (separate from standard 6 factors)
     if (hasCustomFindings) {
-        md += `#### Custom Principles\n\n`;
+        md += `#### CUSTOM PRINCIPLES\n\n`;
         for (const finding of customPrinciplesResult.findings) {
             md += formatFindingDetail(finding, 'custom-principles');
         }

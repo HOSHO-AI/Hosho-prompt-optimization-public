@@ -165,8 +165,8 @@ describe('formatPRComment', () => {
   it('shows detailed findings section with factor headers', () => {
     const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).toContain('### APPENDIX: FURTHER PROMPT IMPROVEMENTS');
-    expect(result).toContain('#### Prompt Injection Resistance');
-    expect(result).toContain('#### Structure/Flow');
+    expect(result).toContain('#### PROMPT INJECTION RESISTANCE');
+    expect(result).toContain('#### STRUCTURE/FLOW');
     expect(result).not.toContain('<details><summary>');
   });
 
@@ -531,7 +531,7 @@ describe('formatOnDemandSummary', () => {
     const result = formatOnDemandSummary(synthesis, factorResults);
     expect(result).toContain('### TOP 3 EDITS');
     expect(result).toContain('**No input delimiters**');
-    expect(result).toContain('#### Prompt Injection Resistance');
+    expect(result).toContain('#### PROMPT INJECTION RESISTANCE');
     expect(result).toContain('1. No input delimiters');
   });
 });
