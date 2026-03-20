@@ -176,7 +176,7 @@ User → Requirements Gatherer → Planner → Builder → Reviewer → User
 
 ### 5. (Optional) Add custom review principles
 
-If your team has specific prompt engineering standards, create a markdown file listing them and pass it via the `custom_principles` input. The reviewer will evaluate PR diffs against these principles in addition to the standard 6-factor review.
+If your team has specific prompt engineering standards, create a markdown file listing them and pass it via the `custom_principles` input. The reviewer will evaluate prompts against these principles in addition to the standard 6-factor review — in both PR review mode (diff analysis) and improve mode (full scoring with a dedicated Custom Principles row in the factor table).
 
 Write each principle as a numbered item — short, actionable, and specific to your team's conventions:
 
