@@ -226,8 +226,7 @@ function formatEditLine(tagged: TaggedFinding): string {
     line = `**${sanitizeInlineText(title)}**`;
   }
 
-  const anchorLink = `#${tagged.factorId}-${f.findingNumber}`;
-  return `${line} — [See ${tagged.factorName} (${f.findingNumber})](${anchorLink})`;
+  return `${line} — See ${tagged.factorName} (${f.findingNumber})`;
 }
 
 function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
@@ -360,12 +359,7 @@ function formatFindingDetail(finding: Finding, factorId?: string): string {
     const lineRef = finding.codeSnippet.startLine === finding.codeSnippet.endLine
       ? `${finding.codeSnippet.startLine}`
       : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
-    if (anchorId) md += `<a name="${anchorId}"></a>\n`;
-    md += `<h4><u>${finding.findingNumber}. ${title} (line ${lineRef})</u></h4>\n\n`;
-
-    if (finding.codeSnippet.issue) {
-      md += `${sanitizeInlineText(finding.codeSnippet.issue)}\n\n`;
-    }
+    md += `**<u>${finding.findingNumber}. ${title} (line ${lineRef})</u>**\n\n`;
 
     const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
     if (cleanedCode.trim()) {
@@ -374,8 +368,7 @@ function formatFindingDetail(finding: Finding, factorId?: string): string {
       md += `${codeFence}\n${cleanedCode}\n${codeFence}\n\n`;
     }
   } else {
-    if (anchorId) md += `<a name="${anchorId}"></a>\n`;
-    md += `<h4><u>${finding.findingNumber}. ${title}</u></h4>\n\n`;
+    md += `**<u>${finding.findingNumber}. ${title}</u>**\n\n`;
   }
 
   md += `**Suggested fix:** ${sanitizeInlineText(finding.consideration)}\n\n`;

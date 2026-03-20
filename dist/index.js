@@ -898,8 +898,7 @@ function formatEditLine(tagged) {
     else {
         line = `**${sanitizeInlineText(title)}**`;
     }
-    const anchorLink = `#${tagged.factorId}-${f.findingNumber}`;
-    return `${line} — [See ${tagged.factorName} (${f.findingNumber})](${anchorLink})`;
+    return `${line} — See ${tagged.factorName} (${f.findingNumber})`;
 }
 function formatTopEdits(tagged, limit = 3) {
     if (tagged.length === 0)
@@ -1018,12 +1017,7 @@ function formatFindingDetail(finding, factorId) {
         const lineRef = finding.codeSnippet.startLine === finding.codeSnippet.endLine
             ? `${finding.codeSnippet.startLine}`
             : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
-        if (anchorId)
-            md += `<a name="${anchorId}"></a>\n`;
-        md += `<h4><u>${finding.findingNumber}. ${title} (line ${lineRef})</u></h4>\n\n`;
-        if (finding.codeSnippet.issue) {
-            md += `${sanitizeInlineText(finding.codeSnippet.issue)}\n\n`;
-        }
+        md += `**<u>${finding.findingNumber}. ${title} (line ${lineRef})</u>**\n\n`;
         const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
         if (cleanedCode.trim()) {
             const codeFence = getCodeFence(cleanedCode);
@@ -1032,9 +1026,7 @@ function formatFindingDetail(finding, factorId) {
         }
     }
     else {
-        if (anchorId)
-            md += `<a name="${anchorId}"></a>\n`;
-        md += `<h4><u>${finding.findingNumber}. ${title}</u></h4>\n\n`;
+        md += `**<u>${finding.findingNumber}. ${title}</u>**\n\n`;
     }
     md += `**Suggested fix:** ${sanitizeInlineText(finding.consideration)}\n\n`;
     if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
