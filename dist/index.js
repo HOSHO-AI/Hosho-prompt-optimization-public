@@ -1018,7 +1018,9 @@ function formatFindingDetail(finding, factorId) {
         const lineRef = finding.codeSnippet.startLine === finding.codeSnippet.endLine
             ? `${finding.codeSnippet.startLine}`
             : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
-        md += `<h4${anchorId ? ` id="${anchorId}"` : ''}>${finding.findingNumber}. ${title} (line ${lineRef})</h4>\n\n`;
+        if (anchorId)
+            md += `<a name="${anchorId}"></a>\n`;
+        md += `<h4>${finding.findingNumber}. ${title} (line ${lineRef})</h4>\n\n`;
         if (finding.codeSnippet.issue) {
             md += `${sanitizeInlineText(finding.codeSnippet.issue)}\n\n`;
         }
@@ -1030,7 +1032,9 @@ function formatFindingDetail(finding, factorId) {
         }
     }
     else {
-        md += `<h4${anchorId ? ` id="${anchorId}"` : ''}>${finding.findingNumber}. ${title}</h4>\n\n`;
+        if (anchorId)
+            md += `<a name="${anchorId}"></a>\n`;
+        md += `<h4>${finding.findingNumber}. ${title}</h4>\n\n`;
     }
     md += `**Suggested fix:** ${sanitizeInlineText(finding.consideration)}\n\n`;
     if (finding.rewrittenCode && finding.rewrittenCode.trim()) {
