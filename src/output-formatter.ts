@@ -570,7 +570,8 @@ export function formatReviewComment(
     md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
   }
 
-  md += `\n<p align="center"><b>Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</b></p>\n\n`;
+  md += `\n<p align="center"><b>Comment <code>/hosho-review</code> to re-run this review after new commits.</b></p>\n`;
+  md += `<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
   md += `*Hosho Bot*\n`;
   return md;
 }
@@ -589,7 +590,8 @@ export function formatReviewJobSummary(
     if (isMultiFile) md += `\n---\n\n`;
   }
 
-  md += `\n<p align="center"><b>Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</b></p>\n\n`;
+  md += `\n<p align="center"><b>Comment <code>/hosho-review</code> to re-run this review after new commits.</b></p>\n`;
+  md += `<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
   md += `*Hosho Bot*\n`;
   return md;
 }
