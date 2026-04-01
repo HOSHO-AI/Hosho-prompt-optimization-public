@@ -107,7 +107,7 @@ function formatHeader(
   prNumber?: number,
 ): string {
   const title = prNumber
-    ? `## PR Review: #${prNumber} → ${filename}`
+    ? `## Hosho PR Review: #${prNumber} → ${filename}`
     : `## Prompt Review: ${filename}`;
 
   let md = `${title}\n\n`;
@@ -122,7 +122,7 @@ function formatScopeHeader(
   const fileCount = comparisons.length;
   const fileList = comparisons.map(c => `\`${c.promptFile}\``).join(', ');
 
-  let md = `## PR Review: ${repoFullName}#${prNumber}\n\n`;
+  let md = `## Hosho PR Review: ${repoFullName}#${prNumber}\n\n`;
 
   if (fileCount === 1) {
     const summary = comparisons[0].scopeSummary;
@@ -570,8 +570,7 @@ export function formatReviewComment(
     md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
   }
 
-  md += `\n<p align="center"><b>Comment <code>/hosho-review</code> to re-run this review after new commits.</b></p>\n`;
-  md += `<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
+  md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
   md += `*Hosho Bot*\n`;
   return md;
 }
@@ -590,8 +589,7 @@ export function formatReviewJobSummary(
     if (isMultiFile) md += `\n---\n\n`;
   }
 
-  md += `\n<p align="center"><b>Comment <code>/hosho-review</code> to re-run this review after new commits.</b></p>\n`;
-  md += `<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
+  md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
   md += `*Hosho Bot*\n`;
   return md;
 }

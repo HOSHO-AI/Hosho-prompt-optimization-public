@@ -797,7 +797,7 @@ function gatherFindings(insights) {
 // ---- Format building blocks ----
 function formatHeader(filename, _description, _targetModelFamily, _targetModelName, prNumber) {
     const title = prNumber
-        ? `## PR Review: #${prNumber} → ${filename}`
+        ? `## Hosho PR Review: #${prNumber} → ${filename}`
         : `## Prompt Review: ${filename}`;
     let md = `${title}\n\n`;
     return md;
@@ -805,7 +805,7 @@ function formatHeader(filename, _description, _targetModelFamily, _targetModelNa
 function formatScopeHeader(comparisons, prNumber, repoFullName) {
     const fileCount = comparisons.length;
     const fileList = comparisons.map(c => `\`${c.promptFile}\``).join(', ');
-    let md = `## PR Review: ${repoFullName}#${prNumber}\n\n`;
+    let md = `## Hosho PR Review: ${repoFullName}#${prNumber}\n\n`;
     if (fileCount === 1) {
         const summary = comparisons[0].scopeSummary;
         md += summary
@@ -1163,8 +1163,7 @@ function formatReviewComment(comparisons, prNumber, repoFullName = '') {
         md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
         md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
     }
-    md += `\n<p align="center"><b>Comment <code>/hosho-review</code> to re-run this review after new commits.</b></p>\n`;
-    md += `<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
+    md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
     md += `*Hosho Bot*\n`;
     return md;
 }
@@ -1177,8 +1176,7 @@ function formatReviewJobSummary(comparisons, prNumber, repoFullName = '') {
         if (isMultiFile)
             md += `\n---\n\n`;
     }
-    md += `\n<p align="center"><b>Comment <code>/hosho-review</code> to re-run this review after new commits.</b></p>\n`;
-    md += `<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
+    md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
     md += `*Hosho Bot*\n`;
     return md;
 }

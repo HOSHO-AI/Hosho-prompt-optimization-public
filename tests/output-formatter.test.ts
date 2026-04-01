@@ -129,7 +129,7 @@ describe('formatPRComment', () => {
 
   it('includes PR review header with repo and PR number', () => {
     const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
-    expect(result).toContain('## PR Review: test-org/test-repo#42');
+    expect(result).toContain('## Hosho PR Review: test-org/test-repo#42');
     expect(result).toContain('**Scope:**');
     expect(result).toContain('`prompts/test-prompt.md`');
   });
