@@ -492,6 +492,17 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         prDescription = (pr.body || '').slice(0, 500);
         core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
     }
+    // Step 0.5: Gather full PR file summary for context (all files, not just prompts)
+    let prFileSummary = '';
+    try {
+        const { data: allFiles } = await octokit.rest.pulls.listFiles({
+            owner, repo, pull_number: pullNumber, per_page: 100,
+        });
+        prFileSummary = allFiles.map(f => `${f.filename}: ${f.status} (+${f.additions} -${f.deletions})`).join('\n');
+    }
+    catch (error) {
+        core.warning(`Could not fetch PR file list: ${error}. Continuing without file context.`);
+    }
     // Step 1: Identify changed prompt files
     const changedFiles = await (0, file_identifier_1.identifyChangedPromptFiles)(octokit, owner, repo, pullNumber, filePattern ? { filePattern } : { promptPath });
     if (changedFiles.length === 0) {
@@ -528,7 +539,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 systemOverview: systemOverview || undefined,
                 customPrinciples: customPrinciples || undefined,
                 files: [file],
-                metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber, prTitle, prDescription },
+                metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber, prTitle, prDescription, prFileSummary: prFileSummary || undefined },
             }, timeoutMs);
             if (resp.status !== 'success' || !resp.results) {
                 errors.push(`${file.name}: ${resp.message || 'Unknown API error'}`);
