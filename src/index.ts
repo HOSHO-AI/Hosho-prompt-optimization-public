@@ -4,7 +4,7 @@ import { basename } from 'path';
 import { readFileSync } from 'fs';
 import { createTwoFilesPatch } from 'diff';
 import { identifyChangedPromptFiles } from './file-identifier';
-import { fetchFileVersions, fetchFileFromDisk } from './file-fetcher';
+import { fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables } from './file-fetcher';
 import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
   formatPRComment,
@@ -178,6 +178,7 @@ async function runPRMode(
 
   // Step 0.5: Gather full PR file summary for context (all files, not just prompts)
   let prFileSummary = '';
+  let allPRFilenames: string[] = [];
   try {
     const { data: allFiles } = await octokit.rest.pulls.listFiles({
       owner, repo, pull_number: pullNumber, per_page: 100,
@@ -185,6 +186,7 @@ async function runPRMode(
     prFileSummary = allFiles.map(f =>
       `${f.filename}: ${f.status} (+${f.additions} -${f.deletions})`
     ).join('\n');
+    allPRFilenames = allFiles.map(f => f.filename);
   } catch (error) {
     core.warning(`Could not fetch PR file list: ${error}. Continuing without file context.`);
   }
@@ -211,12 +213,17 @@ async function runPRMode(
 
   for (const change of changedFiles) {
     const { before, after } = fetchFileVersions(change, baseSha, headSha);
+
+    // Resolve template variables — inject content from changed companion files
+    const resolvedAfter = resolveTemplateVariables(after, change.filename, headSha, allPRFilenames);
+    const resolvedBefore = before ? resolveTemplateVariables(before, change.filename, baseSha, allPRFilenames) : null;
+
     apiFiles.push({
       path: change.filename,
       name: basename(change.filename),
       status: change.status,
-      after,
-      before,
+      after: resolvedAfter,
+      before: resolvedBefore,
     });
   }
 

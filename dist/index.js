@@ -157,9 +157,12 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.fetchFileVersions = fetchFileVersions;
+exports.gitShowFile = gitShowFile;
 exports.fetchFileFromDisk = fetchFileFromDisk;
+exports.resolveTemplateVariables = resolveTemplateVariables;
 const child_process_1 = __nccwpck_require__(5317);
 const fs_1 = __nccwpck_require__(9896);
+const path = __importStar(__nccwpck_require__(6928));
 const core = __importStar(__nccwpck_require__(7484));
 /**
  * Fetches the "after" (PR head) and "before" (base branch) content
@@ -226,6 +229,71 @@ function fetchFileFromDisk(filePath) {
         throw new Error(`Prompt file not found: "${filePath}"`);
     }
     return (0, fs_1.readFileSync)(filePath, 'utf-8');
+}
+const TEMPLATE_VAR_REGEX = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+const JINJA_COMMENT_REGEX = /\{#[\s\S]*?#\}/g;
+/**
+ * Resolves Jinja2-style {{ variable_name }} template placeholders by looking for
+ * matching .md files in the same directory. Only injects content from files that
+ * were changed in the current PR — unchanged files are left as placeholders.
+ *
+ * Graceful failure: on any error, returns the original content unchanged.
+ */
+function resolveTemplateVariables(content, filePath, commitSha, changedFiles) {
+    try {
+        // Strip Jinja2 comments to avoid matching variable names inside comments
+        const cleanContent = content.replace(JINJA_COMMENT_REGEX, '');
+        // Find all {{ variable_name }} placeholders
+        const variables = new Set();
+        let match;
+        const regex = new RegExp(TEMPLATE_VAR_REGEX.source, 'g');
+        while ((match = regex.exec(cleanContent)) !== null) {
+            variables.add(match[1]);
+        }
+        if (variables.size === 0)
+            return content;
+        const dir = path.dirname(filePath);
+        let resolved = content;
+        let resolvedCount = 0;
+        for (const varName of variables) {
+            // Try to find a matching .md file in the same directory
+            const candidates = [
+                `${dir}/${varName}.md`, // exact: sitemap_section_rules.md
+                `${dir}/${varName.replace(/_/g, '-')}.md`, // underscore→hyphen: branding-rules.md
+            ];
+            let matchedPath = null;
+            for (const candidate of candidates) {
+                // Quick check: does the file exist at this commit?
+                if (gitShowFile(commitSha, candidate) !== null) {
+                    matchedPath = candidate;
+                    break;
+                }
+            }
+            if (matchedPath === null)
+                continue; // No file found — runtime variable, leave as-is
+            // Only inject if the file was changed in this PR
+            if (!changedFiles.includes(matchedPath))
+                continue;
+            // Read the file content and inject
+            const injectedContent = gitShowFile(commitSha, matchedPath);
+            if (injectedContent === null)
+                continue; // Read failed — leave placeholder
+            const placeholder = new RegExp(`\\{\\{\\s*${varName}\\s*\\}\\}`, 'g');
+            resolved = resolved.replace(placeholder, injectedContent);
+            resolvedCount++;
+            core.info(`  Resolved template {{ ${varName} }} from ${matchedPath}`);
+        }
+        // Strip Jinja2 comments from the resolved content
+        resolved = resolved.replace(JINJA_COMMENT_REGEX, '');
+        if (resolvedCount > 0) {
+            core.info(`  Template resolution: ${resolvedCount} variable(s) injected, ${variables.size - resolvedCount} left as placeholders`);
+        }
+        return resolved;
+    }
+    catch (error) {
+        core.warning(`Template resolution failed for ${filePath}: ${error}. Continuing with raw content.`);
+        return content;
+    }
 }
 //# sourceMappingURL=file-fetcher.js.map
 
@@ -494,11 +562,13 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     }
     // Step 0.5: Gather full PR file summary for context (all files, not just prompts)
     let prFileSummary = '';
+    let allPRFilenames = [];
     try {
         const { data: allFiles } = await octokit.rest.pulls.listFiles({
             owner, repo, pull_number: pullNumber, per_page: 100,
         });
         prFileSummary = allFiles.map(f => `${f.filename}: ${f.status} (+${f.additions} -${f.deletions})`).join('\n');
+        allPRFilenames = allFiles.map(f => f.filename);
     }
     catch (error) {
         core.warning(`Could not fetch PR file list: ${error}. Continuing without file context.`);
@@ -517,12 +587,15 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     const apiFiles = [];
     for (const change of changedFiles) {
         const { before, after } = (0, file_fetcher_1.fetchFileVersions)(change, baseSha, headSha);
+        // Resolve template variables — inject content from changed companion files
+        const resolvedAfter = (0, file_fetcher_1.resolveTemplateVariables)(after, change.filename, headSha, allPRFilenames);
+        const resolvedBefore = before ? (0, file_fetcher_1.resolveTemplateVariables)(before, change.filename, baseSha, allPRFilenames) : null;
         apiFiles.push({
             path: change.filename,
             name: (0, path_1.basename)(change.filename),
             status: change.status,
-            after,
-            before,
+            after: resolvedAfter,
+            before: resolvedBefore,
         });
     }
     // Step 3: Call Lambda API (one file at a time to avoid connection timeout on large PRs)

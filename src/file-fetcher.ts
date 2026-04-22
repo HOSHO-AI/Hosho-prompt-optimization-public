@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
+import * as path from 'path';
 import * as core from '@actions/core';
 import { PromptFileChange } from './types';
 
@@ -53,7 +54,7 @@ export function fetchFileVersions(
  * Reads a file from a specific git commit using `git show`.
  * Returns null if the file doesn't exist at that commit.
  */
-function gitShowFile(ref: string, filePath: string): string | null {
+export function gitShowFile(ref: string, filePath: string): string | null {
   try {
     const output = execSync(`git show "${ref}:${filePath}"`, {
       encoding: 'utf-8',
@@ -83,4 +84,83 @@ export function fetchFileFromDisk(filePath: string): string {
   }
 
   return readFileSync(filePath, 'utf-8');
+}
+
+const TEMPLATE_VAR_REGEX = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+const JINJA_COMMENT_REGEX = /\{#[\s\S]*?#\}/g;
+
+/**
+ * Resolves Jinja2-style {{ variable_name }} template placeholders by looking for
+ * matching .md files in the same directory. Only injects content from files that
+ * were changed in the current PR — unchanged files are left as placeholders.
+ *
+ * Graceful failure: on any error, returns the original content unchanged.
+ */
+export function resolveTemplateVariables(
+  content: string,
+  filePath: string,
+  commitSha: string,
+  changedFiles: string[],
+): string {
+  try {
+    // Strip Jinja2 comments to avoid matching variable names inside comments
+    const cleanContent = content.replace(JINJA_COMMENT_REGEX, '');
+
+    // Find all {{ variable_name }} placeholders
+    const variables = new Set<string>();
+    let match;
+    const regex = new RegExp(TEMPLATE_VAR_REGEX.source, 'g');
+    while ((match = regex.exec(cleanContent)) !== null) {
+      variables.add(match[1]);
+    }
+
+    if (variables.size === 0) return content;
+
+    const dir = path.dirname(filePath);
+    let resolved = content;
+    let resolvedCount = 0;
+
+    for (const varName of variables) {
+      // Try to find a matching .md file in the same directory
+      const candidates = [
+        `${dir}/${varName}.md`,                        // exact: sitemap_section_rules.md
+        `${dir}/${varName.replace(/_/g, '-')}.md`,     // underscore→hyphen: branding-rules.md
+      ];
+
+      let matchedPath: string | null = null;
+      for (const candidate of candidates) {
+        // Quick check: does the file exist at this commit?
+        if (gitShowFile(commitSha, candidate) !== null) {
+          matchedPath = candidate;
+          break;
+        }
+      }
+
+      if (matchedPath === null) continue; // No file found — runtime variable, leave as-is
+
+      // Only inject if the file was changed in this PR
+      if (!changedFiles.includes(matchedPath)) continue;
+
+      // Read the file content and inject
+      const injectedContent = gitShowFile(commitSha, matchedPath);
+      if (injectedContent === null) continue; // Read failed — leave placeholder
+
+      const placeholder = new RegExp(`\\{\\{\\s*${varName}\\s*\\}\\}`, 'g');
+      resolved = resolved.replace(placeholder, injectedContent);
+      resolvedCount++;
+      core.info(`  Resolved template {{ ${varName} }} from ${matchedPath}`);
+    }
+
+    // Strip Jinja2 comments from the resolved content
+    resolved = resolved.replace(JINJA_COMMENT_REGEX, '');
+
+    if (resolvedCount > 0) {
+      core.info(`  Template resolution: ${resolvedCount} variable(s) injected, ${variables.size - resolvedCount} left as placeholders`);
+    }
+
+    return resolved;
+  } catch (error) {
+    core.warning(`Template resolution failed for ${filePath}: ${error}. Continuing with raw content.`);
+    return content;
+  }
 }
