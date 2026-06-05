@@ -4,7 +4,7 @@ import { basename } from 'path';
 import { readFileSync } from 'fs';
 import { createTwoFilesPatch } from 'diff';
 import { identifyChangedPromptFiles } from './file-identifier';
-import { fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables } from './file-fetcher';
+import { fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, bundleSiblingsForPrompt } from './file-fetcher';
 import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
   formatPRComment,
@@ -58,6 +58,12 @@ async function run(): Promise<void> {
     const timeoutMs = parseInt(core.getInput('timeout') || '180', 10) * 1000;
     const customPrinciplesPath = core.getInput('custom_principles');
     const prNumberInput = core.getInput('pr_number');
+    const skillsDirsRaw = core.getInput('skills_dir');
+    const skillsDirs = skillsDirsRaw
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const bundleSiblings = core.getInput('bundle_siblings').trim().toLowerCase() === 'true';
 
     // Mask the API key in logs
     core.setSecret(apiKey);
@@ -110,7 +116,7 @@ async function run(): Promise<void> {
           'or prompt_path for directory prefix matching (e.g. "prompts/").'
         );
       }
-      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode);
+      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings);
     } else {
       await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
     }
@@ -132,6 +138,8 @@ async function runPRMode(
   timeoutMs: number,
   prNumberInput?: string,
   outputMode: 'review' | 'improve' = 'review',
+  skillsDirs: string[] = [],
+  bundleSiblings: boolean = false,
 ): Promise<void> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -210,20 +218,54 @@ async function runPRMode(
 
   // Step 2: Fetch file content and build API request
   const apiFiles: ReviewAPIRequest['files'] = [];
+  // Per-file record of what got bundled in (skills + sibling filenames), used
+  // for the PR-comment footer so reviewers can see what context was attached.
+  const bundledByFile = new Map<string, { skills: string[]; siblings: string[] }>();
+
+  const siblingPatterns = ['*prompt*.md', '*addendum*.md'];
 
   for (const change of changedFiles) {
     const { before, after } = fetchFileVersions(change, baseSha, headSha);
 
     // Resolve template variables — inject content from changed companion files
-    const resolvedAfter = resolveTemplateVariables(after, change.filename, headSha, allPRFilenames);
-    const resolvedBefore = before ? resolveTemplateVariables(before, change.filename, baseSha, allPRFilenames) : null;
+    let assembledAfter = resolveTemplateVariables(after, change.filename, headSha, allPRFilenames);
+    let assembledBefore = before ? resolveTemplateVariables(before, change.filename, baseSha, allPRFilenames) : null;
+
+    const fileBundled = { skills: [] as string[], siblings: [] as string[] };
+
+    // Skill bundling — both sides need it so diff analysis sees consistent
+    // assembled content rather than flagging "all skills newly added"
+    if (skillsDirs.length > 0) {
+      const r = bundleSkillsForPrompt(assembledAfter, headSha, skillsDirs);
+      assembledAfter = r.assembled;
+      fileBundled.skills = r.bundled;
+      if (assembledBefore !== null) {
+        assembledBefore = bundleSkillsForPrompt(assembledBefore, baseSha, skillsDirs).assembled;
+      }
+    }
+
+    // Sibling bundling — same dual-sided treatment. Handle renames: the
+    // `before` content lives at `previousFilename`, so use its dir for lookup.
+    if (bundleSiblings) {
+      const r = bundleSiblingsForPrompt(assembledAfter, change.filename, headSha, siblingPatterns);
+      assembledAfter = r.assembled;
+      fileBundled.siblings = r.bundled;
+      if (assembledBefore !== null) {
+        const beforePath = (change.status === 'renamed' && change.previousFilename) ? change.previousFilename : change.filename;
+        assembledBefore = bundleSiblingsForPrompt(assembledBefore, beforePath, baseSha, siblingPatterns).assembled;
+      }
+    }
+
+    if (fileBundled.skills.length > 0 || fileBundled.siblings.length > 0) {
+      bundledByFile.set(change.filename, fileBundled);
+    }
 
     apiFiles.push({
       path: change.filename,
       name: basename(change.filename),
       status: change.status,
-      after: resolvedAfter,
-      before: resolvedBefore,
+      after: assembledAfter,
+      before: assembledBefore,
     });
   }
 
@@ -308,15 +350,15 @@ async function runPRMode(
   const repoFullName = `${owner}/${repo}`;
   core.info(`Posting PR ${outputMode === 'review' ? 'review' : 'improve'} comment...`);
   const commentBody = outputMode === 'review'
-    ? formatReviewComment(comparisons, pullNumber, repoFullName)
-    : formatPRComment(comparisons, pullNumber, repoFullName);
+    ? formatReviewComment(comparisons, pullNumber, repoFullName, bundledByFile)
+    : formatPRComment(comparisons, pullNumber, repoFullName, bundledByFile);
   await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
 
   // Step 6: Write Job Summary
   core.info('Writing Job Summary...');
   const summaryBody = outputMode === 'review'
-    ? formatReviewJobSummary(comparisons, pullNumber, repoFullName)
-    : formatJobSummary(comparisons, pullNumber, repoFullName);
+    ? formatReviewJobSummary(comparisons, pullNumber, repoFullName, bundledByFile)
+    : formatJobSummary(comparisons, pullNumber, repoFullName, bundledByFile);
   await core.summary.addRaw(summaryBody).write();
 
   // Step 8: Set outputs

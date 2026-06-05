@@ -492,10 +492,43 @@ function formatPRFileSection(
   return md;
 }
 
+/**
+ * Build a short footer noting what skills + sibling files Hosho bundled into
+ * each prompt for review context. Returns empty string when nothing bundled.
+ */
+export function formatBundledFooter(
+  bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
+): string {
+  if (!bundledByFile || bundledByFile.size === 0) return '';
+
+  const renderList = (names: string[], cap = 6): string => {
+    if (names.length <= cap) return names.join(', ');
+    return `${names.slice(0, cap).join(', ')}, +${names.length - cap} more`;
+  };
+
+  const lines: string[] = [];
+  for (const [filePath, { skills, siblings }] of bundledByFile.entries()) {
+    const parts: string[] = [];
+    if (skills.length > 0) parts.push(`${renderList(skills)} (${skills.length} skill${skills.length === 1 ? '' : 's'})`);
+    if (siblings.length > 0) parts.push(`${renderList(siblings)} (${siblings.length} sibling${siblings.length === 1 ? '' : 's'})`);
+    if (parts.length === 0) continue;
+    lines.push(`- \`${filePath}\` — ${parts.join(' · ')}`);
+  }
+
+  if (lines.length === 0) return '';
+
+  if (lines.length === 1) {
+    // Single-file: inline footer
+    return `\n<sub>📎 Bundled review context: ${lines[0].replace(/^- `[^`]+` — /, '')}</sub>\n`;
+  }
+  return `\n<sub>📎 Bundled review context:\n${lines.join('\n')}</sub>\n`;
+}
+
 export function formatPRComment(
   comparisons: ComparisonResult[],
   prNumber: number,
   repoFullName: string = '',
+  bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
 ): string {
   let md = `${BOT_MARKER}\n`;
   md += formatScopeHeader(comparisons, prNumber, repoFullName);
@@ -512,6 +545,7 @@ export function formatPRComment(
     md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
   }
 
+  md += formatBundledFooter(bundledByFile);
   md += `\n*Hosho Bot*\n`;
   return md;
 }
@@ -520,6 +554,7 @@ export function formatJobSummary(
   comparisons: ComparisonResult[],
   prNumber: number,
   repoFullName: string = '',
+  bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
 ): string {
   let md = '';
   md += formatScopeHeader(comparisons, prNumber, repoFullName);
@@ -530,6 +565,7 @@ export function formatJobSummary(
     if (isMultiFile) md += `\n---\n\n`;
   }
 
+  md += formatBundledFooter(bundledByFile);
   return md;
 }
 
@@ -555,6 +591,7 @@ export function formatReviewComment(
   comparisons: ComparisonResult[],
   prNumber: number,
   repoFullName: string = '',
+  bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
 ): string {
   let md = `${BOT_MARKER}\n`;
   md += formatScopeHeader(comparisons, prNumber, repoFullName);
@@ -570,6 +607,7 @@ export function formatReviewComment(
     md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
   }
 
+  md += formatBundledFooter(bundledByFile);
   md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
   md += `*Hosho Bot*\n`;
   return md;
@@ -579,6 +617,7 @@ export function formatReviewJobSummary(
   comparisons: ComparisonResult[],
   prNumber: number,
   repoFullName: string = '',
+  bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
 ): string {
   let md = '';
   md += formatScopeHeader(comparisons, prNumber, repoFullName);
@@ -589,6 +628,7 @@ export function formatReviewJobSummary(
     if (isMultiFile) md += `\n---\n\n`;
   }
 
+  md += formatBundledFooter(bundledByFile);
   md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
   md += `*Hosho Bot*\n`;
   return md;

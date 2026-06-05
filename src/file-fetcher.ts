@@ -89,6 +89,16 @@ export function fetchFileFromDisk(filePath: string): string {
 const TEMPLATE_VAR_REGEX = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 const JINJA_COMMENT_REGEX = /\{#[\s\S]*?#\}/g;
 
+// Backticked tokens that look like skill names: kebab-case lowercase, ≥2 chars,
+// no slashes/dots/spaces inside backticks.
+const BACKTICK_TOKEN_REGEX = /`([a-z][a-z0-9_-]{1,})`/g;
+
+// Bundling caps — hard limits to prevent runaway context.
+const MAX_SKILLS_PER_PROMPT = 20;
+const MAX_SKILLS_BYTES = 100 * 1024;
+const MAX_SIBLINGS_PER_PROMPT = 10;
+const MAX_SIBLINGS_BYTES = 50 * 1024;
+
 /**
  * Resolves Jinja2-style {{ variable_name }} template placeholders by looking for
  * matching .md files in the same directory. Only injects content from files that
@@ -162,5 +172,198 @@ export function resolveTemplateVariables(
   } catch (error) {
     core.warning(`Template resolution failed for ${filePath}: ${error}. Continuing with raw content.`);
     return content;
+  }
+}
+
+/**
+ * List file entries (non-recursive) in a directory at a specific git ref.
+ * Returns null on error (e.g. directory doesn't exist at that ref).
+ */
+export function gitListDir(ref: string, dirPath: string): string[] | null {
+  try {
+    const refPath = dirPath ? `"${ref}:${dirPath}"` : `"${ref}:"`;
+    const output = execSync(`git ls-tree --name-only ${refPath}`, {
+      encoding: 'utf-8',
+      maxBuffer: 1 * 1024 * 1024,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return output.split('\n').filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Translate a simple glob (`*` only) into an anchored regex.
+ * Examples: '*prompt*.md' → /^.*prompt.*\.md$/
+ */
+function globToRegex(glob: string): RegExp {
+  const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`);
+}
+
+/**
+ * Scan content for backticked tokens (e.g. `copy-rules`) and, for each token
+ * that resolves to `<skillsDir>/<name>/SKILL.md` or `<skillsDir>/<name>.md`
+ * (kebab/snake variants tried), inline the resolved skill content as an
+ * appended `## Skill: <name>` section.
+ *
+ * Reads skills via `gitShowFile(commitSha, ...)` so the content reflects the
+ * skill state at the PR commit, regardless of whether the skill itself was
+ * touched in this PR.
+ *
+ * Graceful failure: on any error, returns original content unchanged.
+ */
+export function bundleSkillsForPrompt(
+  content: string,
+  commitSha: string,
+  skillsDirs: string[],
+): { assembled: string; bundled: string[] } {
+  try {
+    if (!skillsDirs || skillsDirs.length === 0) {
+      return { assembled: content, bundled: [] };
+    }
+
+    // Collect candidate skill names from backticked tokens (deduped).
+    const candidates = new Set<string>();
+    let match;
+    const regex = new RegExp(BACKTICK_TOKEN_REGEX.source, 'g');
+    while ((match = regex.exec(content)) !== null) {
+      candidates.add(match[1]);
+    }
+
+    if (candidates.size === 0) {
+      return { assembled: content, bundled: [] };
+    }
+
+    const resolved: Array<{ name: string; body: string }> = [];
+    let totalBytes = 0;
+    const droppedForCap: string[] = [];
+
+    for (const name of candidates) {
+      if (resolved.length >= MAX_SKILLS_PER_PROMPT) {
+        droppedForCap.push(name);
+        continue;
+      }
+      // Try exact, then kebab-normalized (underscore → hyphen)
+      const kebab = name.replace(/_/g, '-');
+      const candidatePaths: string[] = [];
+      for (const dir of skillsDirs) {
+        candidatePaths.push(`${dir}/${name}/SKILL.md`);
+        if (kebab !== name) candidatePaths.push(`${dir}/${kebab}/SKILL.md`);
+        candidatePaths.push(`${dir}/${name}.md`);
+        if (kebab !== name) candidatePaths.push(`${dir}/${kebab}.md`);
+      }
+
+      let body: string | null = null;
+      for (const candidate of candidatePaths) {
+        body = gitShowFile(commitSha, candidate);
+        if (body !== null) break;
+      }
+      if (body === null) continue;
+
+      const bodyBytes = Buffer.byteLength(body, 'utf-8');
+      if (totalBytes + bodyBytes > MAX_SKILLS_BYTES) {
+        droppedForCap.push(name);
+        continue;
+      }
+      totalBytes += bodyBytes;
+      resolved.push({ name, body });
+    }
+
+    if (resolved.length === 0) {
+      return { assembled: content, bundled: [] };
+    }
+
+    let assembled = content;
+    for (const { name, body } of resolved) {
+      assembled += `\n\n---\n\n## Skill: ${name}\n\n${body}\n`;
+    }
+
+    if (droppedForCap.length > 0) {
+      core.warning(`  Skill bundling: dropped ${droppedForCap.length} skill(s) due to caps (${MAX_SKILLS_PER_PROMPT} skills / ${MAX_SKILLS_BYTES} bytes): ${droppedForCap.join(', ')}`);
+    }
+    core.info(`  Bundled ${resolved.length} skill(s): ${resolved.map(r => r.name).join(', ')}`);
+
+    return { assembled, bundled: resolved.map(r => r.name) };
+  } catch (error) {
+    core.warning(`Skill bundling failed: ${error}. Continuing with raw content.`);
+    return { assembled: content, bundled: [] };
+  }
+}
+
+/**
+ * Find sibling files in the same directory as `filePath` (non-recursive) that
+ * match any of the `patterns` globs (e.g. ['*prompt*.md', '*addendum*.md']),
+ * read each via `gitShowFile`, and append as `## Companion file: <name>`
+ * sections. Excludes the file itself.
+ *
+ * Graceful failure: on any error, returns original content unchanged.
+ */
+export function bundleSiblingsForPrompt(
+  content: string,
+  filePath: string,
+  commitSha: string,
+  patterns: string[],
+): { assembled: string; bundled: string[] } {
+  try {
+    if (!patterns || patterns.length === 0) {
+      return { assembled: content, bundled: [] };
+    }
+    const dir = path.dirname(filePath);
+    const base = path.basename(filePath);
+    const entries = gitListDir(commitSha, dir);
+    if (!entries) {
+      return { assembled: content, bundled: [] };
+    }
+
+    const compiled = patterns.map(globToRegex);
+    const matching = entries.filter(e => {
+      if (e === base) return false;
+      return compiled.some(r => r.test(e));
+    });
+
+    if (matching.length === 0) {
+      return { assembled: content, bundled: [] };
+    }
+
+    const resolved: Array<{ name: string; body: string }> = [];
+    let totalBytes = 0;
+    const droppedForCap: string[] = [];
+
+    for (const name of matching) {
+      if (resolved.length >= MAX_SIBLINGS_PER_PROMPT) {
+        droppedForCap.push(name);
+        continue;
+      }
+      const body = gitShowFile(commitSha, `${dir}/${name}`);
+      if (body === null) continue;
+      const bodyBytes = Buffer.byteLength(body, 'utf-8');
+      if (totalBytes + bodyBytes > MAX_SIBLINGS_BYTES) {
+        droppedForCap.push(name);
+        continue;
+      }
+      totalBytes += bodyBytes;
+      resolved.push({ name, body });
+    }
+
+    if (resolved.length === 0) {
+      return { assembled: content, bundled: [] };
+    }
+
+    let assembled = content;
+    for (const { name, body } of resolved) {
+      assembled += `\n\n---\n\n## Companion file: ${name}\n\n${body}\n`;
+    }
+
+    if (droppedForCap.length > 0) {
+      core.warning(`  Sibling bundling: dropped ${droppedForCap.length} file(s) due to caps (${MAX_SIBLINGS_PER_PROMPT} files / ${MAX_SIBLINGS_BYTES} bytes): ${droppedForCap.join(', ')}`);
+    }
+    core.info(`  Bundled ${resolved.length} sibling(s): ${resolved.map(r => r.name).join(', ')}`);
+
+    return { assembled, bundled: resolved.map(r => r.name) };
+  } catch (error) {
+    core.warning(`Sibling bundling failed for ${filePath}: ${error}. Continuing with raw content.`);
+    return { assembled: content, bundled: [] };
   }
 }

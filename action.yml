@@ -38,6 +38,14 @@ inputs:
     description: 'Path to markdown file with custom prompt review principles'
     required: false
     default: ''
+  skills_dir:
+    description: 'Directory (or newline-separated list of directories) containing skill files. When set, backticked tokens in prompts that resolve to `<skills_dir>/<name>/SKILL.md` or `<skills_dir>/<name>.md` are bundled as review context. Optional — leave empty to skip skill bundling.'
+    required: false
+    default: ''
+  bundle_siblings:
+    description: 'When "true", bundle sibling `*prompt*.md` and `*addendum*.md` files from the same directory as each reviewed prompt. Catches paired system/user prompts and runtime addendums. Optional, default false.'
+    required: false
+    default: 'false'
   pr_number:
     description: 'PR number (required when triggered via issue_comment slash command)'
     required: false

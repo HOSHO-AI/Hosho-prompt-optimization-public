@@ -160,6 +160,9 @@ exports.fetchFileVersions = fetchFileVersions;
 exports.gitShowFile = gitShowFile;
 exports.fetchFileFromDisk = fetchFileFromDisk;
 exports.resolveTemplateVariables = resolveTemplateVariables;
+exports.gitListDir = gitListDir;
+exports.bundleSkillsForPrompt = bundleSkillsForPrompt;
+exports.bundleSiblingsForPrompt = bundleSiblingsForPrompt;
 const child_process_1 = __nccwpck_require__(5317);
 const fs_1 = __nccwpck_require__(9896);
 const path = __importStar(__nccwpck_require__(6928));
@@ -232,6 +235,14 @@ function fetchFileFromDisk(filePath) {
 }
 const TEMPLATE_VAR_REGEX = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 const JINJA_COMMENT_REGEX = /\{#[\s\S]*?#\}/g;
+// Backticked tokens that look like skill names: kebab-case lowercase, ≥2 chars,
+// no slashes/dots/spaces inside backticks.
+const BACKTICK_TOKEN_REGEX = /`([a-z][a-z0-9_-]{1,})`/g;
+// Bundling caps — hard limits to prevent runaway context.
+const MAX_SKILLS_PER_PROMPT = 20;
+const MAX_SKILLS_BYTES = 100 * 1024;
+const MAX_SIBLINGS_PER_PROMPT = 10;
+const MAX_SIBLINGS_BYTES = 50 * 1024;
 /**
  * Resolves Jinja2-style {{ variable_name }} template placeholders by looking for
  * matching .md files in the same directory. Only injects content from files that
@@ -293,6 +304,177 @@ function resolveTemplateVariables(content, filePath, commitSha, changedFiles) {
     catch (error) {
         core.warning(`Template resolution failed for ${filePath}: ${error}. Continuing with raw content.`);
         return content;
+    }
+}
+/**
+ * List file entries (non-recursive) in a directory at a specific git ref.
+ * Returns null on error (e.g. directory doesn't exist at that ref).
+ */
+function gitListDir(ref, dirPath) {
+    try {
+        const refPath = dirPath ? `"${ref}:${dirPath}"` : `"${ref}:"`;
+        const output = (0, child_process_1.execSync)(`git ls-tree --name-only ${refPath}`, {
+            encoding: 'utf-8',
+            maxBuffer: 1 * 1024 * 1024,
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        return output.split('\n').filter(Boolean);
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * Translate a simple glob (`*` only) into an anchored regex.
+ * Examples: '*prompt*.md' → /^.*prompt.*\.md$/
+ */
+function globToRegex(glob) {
+    const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+    return new RegExp(`^${escaped}$`);
+}
+/**
+ * Scan content for backticked tokens (e.g. `copy-rules`) and, for each token
+ * that resolves to `<skillsDir>/<name>/SKILL.md` or `<skillsDir>/<name>.md`
+ * (kebab/snake variants tried), inline the resolved skill content as an
+ * appended `## Skill: <name>` section.
+ *
+ * Reads skills via `gitShowFile(commitSha, ...)` so the content reflects the
+ * skill state at the PR commit, regardless of whether the skill itself was
+ * touched in this PR.
+ *
+ * Graceful failure: on any error, returns original content unchanged.
+ */
+function bundleSkillsForPrompt(content, commitSha, skillsDirs) {
+    try {
+        if (!skillsDirs || skillsDirs.length === 0) {
+            return { assembled: content, bundled: [] };
+        }
+        // Collect candidate skill names from backticked tokens (deduped).
+        const candidates = new Set();
+        let match;
+        const regex = new RegExp(BACKTICK_TOKEN_REGEX.source, 'g');
+        while ((match = regex.exec(content)) !== null) {
+            candidates.add(match[1]);
+        }
+        if (candidates.size === 0) {
+            return { assembled: content, bundled: [] };
+        }
+        const resolved = [];
+        let totalBytes = 0;
+        const droppedForCap = [];
+        for (const name of candidates) {
+            if (resolved.length >= MAX_SKILLS_PER_PROMPT) {
+                droppedForCap.push(name);
+                continue;
+            }
+            // Try exact, then kebab-normalized (underscore → hyphen)
+            const kebab = name.replace(/_/g, '-');
+            const candidatePaths = [];
+            for (const dir of skillsDirs) {
+                candidatePaths.push(`${dir}/${name}/SKILL.md`);
+                if (kebab !== name)
+                    candidatePaths.push(`${dir}/${kebab}/SKILL.md`);
+                candidatePaths.push(`${dir}/${name}.md`);
+                if (kebab !== name)
+                    candidatePaths.push(`${dir}/${kebab}.md`);
+            }
+            let body = null;
+            for (const candidate of candidatePaths) {
+                body = gitShowFile(commitSha, candidate);
+                if (body !== null)
+                    break;
+            }
+            if (body === null)
+                continue;
+            const bodyBytes = Buffer.byteLength(body, 'utf-8');
+            if (totalBytes + bodyBytes > MAX_SKILLS_BYTES) {
+                droppedForCap.push(name);
+                continue;
+            }
+            totalBytes += bodyBytes;
+            resolved.push({ name, body });
+        }
+        if (resolved.length === 0) {
+            return { assembled: content, bundled: [] };
+        }
+        let assembled = content;
+        for (const { name, body } of resolved) {
+            assembled += `\n\n---\n\n## Skill: ${name}\n\n${body}\n`;
+        }
+        if (droppedForCap.length > 0) {
+            core.warning(`  Skill bundling: dropped ${droppedForCap.length} skill(s) due to caps (${MAX_SKILLS_PER_PROMPT} skills / ${MAX_SKILLS_BYTES} bytes): ${droppedForCap.join(', ')}`);
+        }
+        core.info(`  Bundled ${resolved.length} skill(s): ${resolved.map(r => r.name).join(', ')}`);
+        return { assembled, bundled: resolved.map(r => r.name) };
+    }
+    catch (error) {
+        core.warning(`Skill bundling failed: ${error}. Continuing with raw content.`);
+        return { assembled: content, bundled: [] };
+    }
+}
+/**
+ * Find sibling files in the same directory as `filePath` (non-recursive) that
+ * match any of the `patterns` globs (e.g. ['*prompt*.md', '*addendum*.md']),
+ * read each via `gitShowFile`, and append as `## Companion file: <name>`
+ * sections. Excludes the file itself.
+ *
+ * Graceful failure: on any error, returns original content unchanged.
+ */
+function bundleSiblingsForPrompt(content, filePath, commitSha, patterns) {
+    try {
+        if (!patterns || patterns.length === 0) {
+            return { assembled: content, bundled: [] };
+        }
+        const dir = path.dirname(filePath);
+        const base = path.basename(filePath);
+        const entries = gitListDir(commitSha, dir);
+        if (!entries) {
+            return { assembled: content, bundled: [] };
+        }
+        const compiled = patterns.map(globToRegex);
+        const matching = entries.filter(e => {
+            if (e === base)
+                return false;
+            return compiled.some(r => r.test(e));
+        });
+        if (matching.length === 0) {
+            return { assembled: content, bundled: [] };
+        }
+        const resolved = [];
+        let totalBytes = 0;
+        const droppedForCap = [];
+        for (const name of matching) {
+            if (resolved.length >= MAX_SIBLINGS_PER_PROMPT) {
+                droppedForCap.push(name);
+                continue;
+            }
+            const body = gitShowFile(commitSha, `${dir}/${name}`);
+            if (body === null)
+                continue;
+            const bodyBytes = Buffer.byteLength(body, 'utf-8');
+            if (totalBytes + bodyBytes > MAX_SIBLINGS_BYTES) {
+                droppedForCap.push(name);
+                continue;
+            }
+            totalBytes += bodyBytes;
+            resolved.push({ name, body });
+        }
+        if (resolved.length === 0) {
+            return { assembled: content, bundled: [] };
+        }
+        let assembled = content;
+        for (const { name, body } of resolved) {
+            assembled += `\n\n---\n\n## Companion file: ${name}\n\n${body}\n`;
+        }
+        if (droppedForCap.length > 0) {
+            core.warning(`  Sibling bundling: dropped ${droppedForCap.length} file(s) due to caps (${MAX_SIBLINGS_PER_PROMPT} files / ${MAX_SIBLINGS_BYTES} bytes): ${droppedForCap.join(', ')}`);
+        }
+        core.info(`  Bundled ${resolved.length} sibling(s): ${resolved.map(r => r.name).join(', ')}`);
+        return { assembled, bundled: resolved.map(r => r.name) };
+    }
+    catch (error) {
+        core.warning(`Sibling bundling failed for ${filePath}: ${error}. Continuing with raw content.`);
+        return { assembled: content, bundled: [] };
     }
 }
 //# sourceMappingURL=file-fetcher.js.map
@@ -462,6 +644,12 @@ async function run() {
         const timeoutMs = parseInt(core.getInput('timeout') || '180', 10) * 1000;
         const customPrinciplesPath = core.getInput('custom_principles');
         const prNumberInput = core.getInput('pr_number');
+        const skillsDirsRaw = core.getInput('skills_dir');
+        const skillsDirs = skillsDirsRaw
+            .split('\n')
+            .map(s => s.trim())
+            .filter(Boolean);
+        const bundleSiblings = core.getInput('bundle_siblings').trim().toLowerCase() === 'true';
         // Mask the API key in logs
         core.setSecret(apiKey);
         // Read system overview file if provided
@@ -508,7 +696,7 @@ async function run() {
                     'Use file_pattern for glob matching (e.g. "**/*system-prompt*.md") ' +
                     'or prompt_path for directory prefix matching (e.g. "prompts/").');
             }
-            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode);
+            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings);
         }
         else {
             await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
@@ -520,7 +708,7 @@ async function run() {
     }
 }
 // ---- PR Mode ----
-async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode = 'review') {
+async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode = 'review', skillsDirs = [], bundleSiblings = false) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
         throw new Error('GITHUB_TOKEN environment variable is required for PR mode');
@@ -585,17 +773,46 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     await updateWorkflowRunName(promptNames, pullNumber);
     // Step 2: Fetch file content and build API request
     const apiFiles = [];
+    // Per-file record of what got bundled in (skills + sibling filenames), used
+    // for the PR-comment footer so reviewers can see what context was attached.
+    const bundledByFile = new Map();
+    const siblingPatterns = ['*prompt*.md', '*addendum*.md'];
     for (const change of changedFiles) {
         const { before, after } = (0, file_fetcher_1.fetchFileVersions)(change, baseSha, headSha);
         // Resolve template variables — inject content from changed companion files
-        const resolvedAfter = (0, file_fetcher_1.resolveTemplateVariables)(after, change.filename, headSha, allPRFilenames);
-        const resolvedBefore = before ? (0, file_fetcher_1.resolveTemplateVariables)(before, change.filename, baseSha, allPRFilenames) : null;
+        let assembledAfter = (0, file_fetcher_1.resolveTemplateVariables)(after, change.filename, headSha, allPRFilenames);
+        let assembledBefore = before ? (0, file_fetcher_1.resolveTemplateVariables)(before, change.filename, baseSha, allPRFilenames) : null;
+        const fileBundled = { skills: [], siblings: [] };
+        // Skill bundling — both sides need it so diff analysis sees consistent
+        // assembled content rather than flagging "all skills newly added"
+        if (skillsDirs.length > 0) {
+            const r = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledAfter, headSha, skillsDirs);
+            assembledAfter = r.assembled;
+            fileBundled.skills = r.bundled;
+            if (assembledBefore !== null) {
+                assembledBefore = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledBefore, baseSha, skillsDirs).assembled;
+            }
+        }
+        // Sibling bundling — same dual-sided treatment. Handle renames: the
+        // `before` content lives at `previousFilename`, so use its dir for lookup.
+        if (bundleSiblings) {
+            const r = (0, file_fetcher_1.bundleSiblingsForPrompt)(assembledAfter, change.filename, headSha, siblingPatterns);
+            assembledAfter = r.assembled;
+            fileBundled.siblings = r.bundled;
+            if (assembledBefore !== null) {
+                const beforePath = (change.status === 'renamed' && change.previousFilename) ? change.previousFilename : change.filename;
+                assembledBefore = (0, file_fetcher_1.bundleSiblingsForPrompt)(assembledBefore, beforePath, baseSha, siblingPatterns).assembled;
+            }
+        }
+        if (fileBundled.skills.length > 0 || fileBundled.siblings.length > 0) {
+            bundledByFile.set(change.filename, fileBundled);
+        }
         apiFiles.push({
             path: change.filename,
             name: (0, path_1.basename)(change.filename),
             status: change.status,
-            after: resolvedAfter,
-            before: resolvedBefore,
+            after: assembledAfter,
+            before: assembledBefore,
         });
     }
     // Step 3: Call Lambda API (one file at a time to avoid connection timeout on large PRs)
@@ -674,14 +891,14 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     const repoFullName = `${owner}/${repo}`;
     core.info(`Posting PR ${outputMode === 'review' ? 'review' : 'improve'} comment...`);
     const commentBody = outputMode === 'review'
-        ? (0, output_formatter_1.formatReviewComment)(comparisons, pullNumber, repoFullName)
-        : (0, output_formatter_1.formatPRComment)(comparisons, pullNumber, repoFullName);
+        ? (0, output_formatter_1.formatReviewComment)(comparisons, pullNumber, repoFullName, bundledByFile)
+        : (0, output_formatter_1.formatPRComment)(comparisons, pullNumber, repoFullName, bundledByFile);
     await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
     // Step 6: Write Job Summary
     core.info('Writing Job Summary...');
     const summaryBody = outputMode === 'review'
-        ? (0, output_formatter_1.formatReviewJobSummary)(comparisons, pullNumber, repoFullName)
-        : (0, output_formatter_1.formatJobSummary)(comparisons, pullNumber, repoFullName);
+        ? (0, output_formatter_1.formatReviewJobSummary)(comparisons, pullNumber, repoFullName, bundledByFile)
+        : (0, output_formatter_1.formatJobSummary)(comparisons, pullNumber, repoFullName, bundledByFile);
     await core.summary.addRaw(summaryBody).write();
     // Step 8: Set outputs
     const overallScores = comparisons.map((c) => c.synthesis.overallScore);
@@ -787,6 +1004,7 @@ run();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.BOT_MARKER = void 0;
 exports.formatOnDemandSummary = formatOnDemandSummary;
+exports.formatBundledFooter = formatBundledFooter;
 exports.formatPRComment = formatPRComment;
 exports.formatJobSummary = formatJobSummary;
 exports.formatReviewComment = formatReviewComment;
@@ -1194,7 +1412,38 @@ function formatPRFileSection(comp, prNumber, isMultiFile) {
     md += formatAllFindings(enrichedInsights, tableContent, comp.customPrinciplesResult);
     return md;
 }
-function formatPRComment(comparisons, prNumber, repoFullName = '') {
+/**
+ * Build a short footer noting what skills + sibling files Hosho bundled into
+ * each prompt for review context. Returns empty string when nothing bundled.
+ */
+function formatBundledFooter(bundledByFile) {
+    if (!bundledByFile || bundledByFile.size === 0)
+        return '';
+    const renderList = (names, cap = 6) => {
+        if (names.length <= cap)
+            return names.join(', ');
+        return `${names.slice(0, cap).join(', ')}, +${names.length - cap} more`;
+    };
+    const lines = [];
+    for (const [filePath, { skills, siblings }] of bundledByFile.entries()) {
+        const parts = [];
+        if (skills.length > 0)
+            parts.push(`${renderList(skills)} (${skills.length} skill${skills.length === 1 ? '' : 's'})`);
+        if (siblings.length > 0)
+            parts.push(`${renderList(siblings)} (${siblings.length} sibling${siblings.length === 1 ? '' : 's'})`);
+        if (parts.length === 0)
+            continue;
+        lines.push(`- \`${filePath}\` — ${parts.join(' · ')}`);
+    }
+    if (lines.length === 0)
+        return '';
+    if (lines.length === 1) {
+        // Single-file: inline footer
+        return `\n<sub>📎 Bundled review context: ${lines[0].replace(/^- `[^`]+` — /, '')}</sub>\n`;
+    }
+    return `\n<sub>📎 Bundled review context:\n${lines.join('\n')}</sub>\n`;
+}
+function formatPRComment(comparisons, prNumber, repoFullName = '', bundledByFile) {
     let md = `${BOT_MARKER}\n`;
     md += formatScopeHeader(comparisons, prNumber, repoFullName);
     const isMultiFile = comparisons.length > 1;
@@ -1208,10 +1457,11 @@ function formatPRComment(comparisons, prNumber, repoFullName = '') {
         md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
         md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
     }
+    md += formatBundledFooter(bundledByFile);
     md += `\n*Hosho Bot*\n`;
     return md;
 }
-function formatJobSummary(comparisons, prNumber, repoFullName = '') {
+function formatJobSummary(comparisons, prNumber, repoFullName = '', bundledByFile) {
     let md = '';
     md += formatScopeHeader(comparisons, prNumber, repoFullName);
     const isMultiFile = comparisons.length > 1;
@@ -1220,6 +1470,7 @@ function formatJobSummary(comparisons, prNumber, repoFullName = '') {
         if (isMultiFile)
             md += `\n---\n\n`;
     }
+    md += formatBundledFooter(bundledByFile);
     return md;
 }
 // ---- Review-mode output (slim: verdict + changes + fixes only) ----
@@ -1234,7 +1485,7 @@ function formatReviewFileSection(comp, prNumber, isMultiFile) {
     md += formatRevertSection(comp.changeSummary);
     return md;
 }
-function formatReviewComment(comparisons, prNumber, repoFullName = '') {
+function formatReviewComment(comparisons, prNumber, repoFullName = '', bundledByFile) {
     let md = `${BOT_MARKER}\n`;
     md += formatScopeHeader(comparisons, prNumber, repoFullName);
     const isMultiFile = comparisons.length > 1;
@@ -1247,11 +1498,12 @@ function formatReviewComment(comparisons, prNumber, repoFullName = '') {
         md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
         md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
     }
+    md += formatBundledFooter(bundledByFile);
     md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
     md += `*Hosho Bot*\n`;
     return md;
 }
-function formatReviewJobSummary(comparisons, prNumber, repoFullName = '') {
+function formatReviewJobSummary(comparisons, prNumber, repoFullName = '', bundledByFile) {
     let md = '';
     md += formatScopeHeader(comparisons, prNumber, repoFullName);
     const isMultiFile = comparisons.length > 1;
@@ -1260,6 +1512,7 @@ function formatReviewJobSummary(comparisons, prNumber, repoFullName = '') {
         if (isMultiFile)
             md += `\n---\n\n`;
     }
+    md += formatBundledFooter(bundledByFile);
     md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
     md += `*Hosho Bot*\n`;
     return md;
