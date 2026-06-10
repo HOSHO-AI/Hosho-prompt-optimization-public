@@ -258,18 +258,22 @@ describe('formatBundledFooter', () => {
     expect(formatBundledFooter(m)).toBe('');
   });
 
-  it('formats a single-file single-skill footer inline', () => {
+  it('formats a single-file single-skill footer inline (no paperclip emoji)', () => {
     const m = new Map([['a.md', { skills: ['copy-rules'], siblings: [] }]]);
     const out = formatBundledFooter(m);
     expect(out).toContain('copy-rules');
     expect(out).toContain('1 skill');
+    expect(out).toContain('Bundled review context');
+    expect(out).not.toContain('📎');
   });
 
-  it('caps long skill lists with "+N more"', () => {
+  it('writes out all skill names (no "+N more" cap)', () => {
     const skills = Array.from({ length: 12 }, (_, i) => `skill${i}`);
     const m = new Map([['a.md', { skills, siblings: [] }]]);
     const out = formatBundledFooter(m);
-    expect(out).toContain('+6 more');
+    expect(out).not.toContain('more');
+    expect(out).toContain('skill0');
+    expect(out).toContain('skill11');
     expect(out).toContain('12 skills');
   });
 

@@ -1419,11 +1419,7 @@ function formatPRFileSection(comp, prNumber, isMultiFile) {
 function formatBundledFooter(bundledByFile) {
     if (!bundledByFile || bundledByFile.size === 0)
         return '';
-    const renderList = (names, cap = 6) => {
-        if (names.length <= cap)
-            return names.join(', ');
-        return `${names.slice(0, cap).join(', ')}, +${names.length - cap} more`;
-    };
+    const renderList = (names) => names.join(', ');
     const lines = [];
     for (const [filePath, { skills, siblings }] of bundledByFile.entries()) {
         const parts = [];
@@ -1439,9 +1435,9 @@ function formatBundledFooter(bundledByFile) {
         return '';
     if (lines.length === 1) {
         // Single-file: inline footer
-        return `\n<sub>📎 Bundled review context: ${lines[0].replace(/^- `[^`]+` — /, '')}</sub>\n`;
+        return `\n<sub>Bundled review context: ${lines[0].replace(/^- `[^`]+` — /, '')}</sub>\n`;
     }
-    return `\n<sub>📎 Bundled review context:\n${lines.join('\n')}</sub>\n`;
+    return `\n<sub>Bundled review context:\n${lines.join('\n')}</sub>\n`;
 }
 function formatPRComment(comparisons, prNumber, repoFullName = '', bundledByFile) {
     let md = `${BOT_MARKER}\n`;

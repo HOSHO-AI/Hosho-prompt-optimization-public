@@ -501,10 +501,7 @@ export function formatBundledFooter(
 ): string {
   if (!bundledByFile || bundledByFile.size === 0) return '';
 
-  const renderList = (names: string[], cap = 6): string => {
-    if (names.length <= cap) return names.join(', ');
-    return `${names.slice(0, cap).join(', ')}, +${names.length - cap} more`;
-  };
+  const renderList = (names: string[]): string => names.join(', ');
 
   const lines: string[] = [];
   for (const [filePath, { skills, siblings }] of bundledByFile.entries()) {
@@ -519,9 +516,9 @@ export function formatBundledFooter(
 
   if (lines.length === 1) {
     // Single-file: inline footer
-    return `\n<sub>📎 Bundled review context: ${lines[0].replace(/^- `[^`]+` — /, '')}</sub>\n`;
+    return `\n<sub>Bundled review context: ${lines[0].replace(/^- `[^`]+` — /, '')}</sub>\n`;
   }
-  return `\n<sub>📎 Bundled review context:\n${lines.join('\n')}</sub>\n`;
+  return `\n<sub>Bundled review context:\n${lines.join('\n')}</sub>\n`;
 }
 
 export function formatPRComment(
