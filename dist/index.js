@@ -1350,16 +1350,23 @@ function formatFindingDetail(finding, factorId) {
     return md;
 }
 function formatAllFindings(insights, tableContent, customPrinciplesResult) {
-    const withFindings = insights.filter(f => f.findings.length > 0);
+    // Show a factor if it has findings OR identified gaps (gaps surface even when no code-fix was rendered).
+    const withContent = insights.filter(f => f.findings.length > 0 || (f.gapSummaries?.length ?? 0) > 0);
     const hasCustomFindings = customPrinciplesResult && customPrinciplesResult.findings.length > 0;
-    if (withFindings.length === 0 && !tableContent && !hasCustomFindings)
+    if (withContent.length === 0 && !tableContent && !hasCustomFindings)
         return '';
     let md = `---\n### APPENDIX: FURTHER PROMPT IMPROVEMENTS\n\n`;
     if (tableContent) {
         md += tableContent;
     }
-    for (const insight of withFindings) {
+    for (const insight of withContent) {
         md += `#### ${insight.factorName.toUpperCase()}\n\n`;
+        if (insight.gapSummaries && insight.gapSummaries.length > 0) {
+            md += `**Gaps identified:**\n\n`;
+            for (const g of insight.gapSummaries)
+                md += `- ${g}\n`;
+            md += `\n`;
+        }
         for (const finding of insight.findings) {
             md += formatFindingDetail(finding, insight.factorId);
         }
