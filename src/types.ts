@@ -54,6 +54,7 @@ export interface FactorEvaluationResult {
   tableRationale: string;
   findings: Finding[];
   assessments: AssessmentResult[];
+  gapSummaries?: string[];
 
   // PR mode fields (only present when diff provided)
   changeDirection?: 'improved' | 'no-change' | 'worse' | 'mixed';
@@ -69,6 +70,7 @@ export interface FactorInsight {
   score: number;
   scoreLabel: string;
   findings: Finding[];
+  gapSummaries?: string[];
 
   changeDirection?: 'improved' | 'no-change' | 'worse' | 'mixed';
   changeRationale?: string;
