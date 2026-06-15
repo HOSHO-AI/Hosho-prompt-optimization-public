@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { ComparisonResult, ChangeItem, FactorEvaluationResult, SynthesisResult, CustomPrinciplesResult } from './types';
+import { ComparisonResult, ChangeItem, FactorEvaluationResult, SynthesisResult, CustomPrinciplesResult, Segment } from './types';
 
 const DEFAULT_API_URL = 'https://2pdp5lkd4g5a4hi3aigcdxighe0ebgjy.lambda-url.us-east-1.on.aws/';
 const MAX_RETRIES = 3;
@@ -19,6 +19,7 @@ export interface ReviewAPIRequest {
     status: 'added' | 'modified' | 'renamed';
     after: string;
     before: string | null;
+    segments?: Segment[];
   }>;
   metadata?: { repository?: string; prNumber?: number; prTitle?: string; prDescription?: string; prFileSummary?: string };
 }

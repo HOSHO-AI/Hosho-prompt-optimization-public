@@ -2,7 +2,8 @@ import { execSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
 import * as path from 'path';
 import * as core from '@actions/core';
-import { PromptFileChange } from './types';
+import { minimatch } from 'minimatch';
+import { PromptFileChange, Segment } from './types';
 
 /**
  * Fetches the "after" (PR head) and "before" (base branch) content
@@ -366,4 +367,220 @@ export function bundleSiblingsForPrompt(
     core.warning(`Sibling bundling failed for ${filePath}: ${error}. Continuing with raw content.`);
     return { assembled: content, bundled: [] };
   }
+}
+
+// ---- Assembly config: shared-reference injection (WS-1) + convention check (WS-2) ----
+//
+// This is a MINIMAL, customer-authored EXCEPTION list. Normal skills/siblings are
+// auto-resolved above with no config. The assembly config only handles abnormal
+// path-style references a customer wants treated as part of the complete prompt
+// (e.g. a shared `docs/rules/agent-security.md` doc that isn't a backtick skill token).
+
+export interface SharedReferenceRequirement {
+  file: string;                                 // repo-relative file the prompt must reference
+  for: string;                                  // minimatch glob of prompt paths this applies to
+  severity: 'critical' | 'suggestion';
+}
+
+export interface AssemblyConfig {
+  injectWhenReferenced: string[];               // repo-relative files to bundle when a prompt references them
+  requireReference: SharedReferenceRequirement[];
+}
+
+export const EMPTY_ASSEMBLY_CONFIG: AssemblyConfig = { injectWhenReferenced: [], requireReference: [] };
+
+const MAX_REFERENCES_PER_PROMPT = 10;
+const MAX_REFERENCES_BYTES = 100 * 1024;
+
+function stripYamlComment(line: string): string {
+  if (line.trimStart().startsWith('#')) return '';
+  const m = line.match(/\s#/);
+  return m && m.index !== undefined ? line.slice(0, m.index) : line;
+}
+
+function unquote(s: string): string {
+  return s.trim().replace(/^['"]/, '').replace(/['"]$/, '').trim();
+}
+
+function applyRequireKv(item: Partial<SharedReferenceRequirement>, key: string, val: string): void {
+  if (key === 'file') item.file = val;
+  else if (key === 'for') item.for = val;
+  else if (key === 'severity') item.severity = val === 'suggestion' ? 'suggestion' : 'critical';
+}
+
+/**
+ * Zero-dependency parser for the minimal assembly-config schema:
+ *
+ *   inject_when_referenced:
+ *     - backend/docs/rules/agent-security.md
+ *   require_reference:
+ *     - file: backend/docs/rules/agent-security.md
+ *       for: "backend/app/llm/**\/*prompt*.md"
+ *       severity: critical
+ *
+ * Tolerant of comments, blank lines, and quotes. Unknown keys are ignored.
+ * Never throws — returns whatever it could parse.
+ */
+export function parseAssemblyConfig(raw: string): AssemblyConfig {
+  const cfg: AssemblyConfig = { injectWhenReferenced: [], requireReference: [] };
+  if (!raw || !raw.trim()) return cfg;
+
+  let section: 'inject' | 'require' | null = null;
+  let current: Partial<SharedReferenceRequirement> | null = null;
+
+  const flush = (): void => {
+    if (current && current.file) {
+      cfg.requireReference.push({
+        file: current.file,
+        for: current.for || '**',
+        severity: current.severity === 'suggestion' ? 'suggestion' : 'critical',
+      });
+    }
+    current = null;
+  };
+
+  try {
+    for (const rawLine of raw.split('\n')) {
+      const line = stripYamlComment(rawLine).replace(/\s+$/, '');
+      if (!line.trim()) continue;
+
+      // Top-level key (no indentation)
+      const topKey = !/^\s/.test(line) && line.match(/^([a-zA-Z_][\w]*):\s*$/);
+      if (topKey) {
+        flush();
+        section = topKey[1] === 'inject_when_referenced' ? 'inject'
+          : topKey[1] === 'require_reference' ? 'require' : null;
+        continue;
+      }
+      if (!/^\s/.test(line)) { flush(); section = null; continue; }
+
+      const trimmed = line.trim();
+      if (section === 'inject') {
+        const m = trimmed.match(/^-\s*(.+)$/);
+        if (m) cfg.injectWhenReferenced.push(unquote(m[1]));
+      } else if (section === 'require') {
+        const itemStart = trimmed.match(/^-\s*(.*)$/);
+        if (itemStart) {
+          flush();
+          current = {};
+          const kv = itemStart[1].match(/^([a-zA-Z_]+):\s*(.*)$/);
+          if (kv) applyRequireKv(current, kv[1], unquote(kv[2]));
+        } else {
+          const kv = trimmed.match(/^([a-zA-Z_]+):\s*(.*)$/);
+          if (kv && current) applyRequireKv(current, kv[1], unquote(kv[2]));
+        }
+      }
+    }
+    flush();
+  } catch (error) {
+    core.warning(`Failed to parse assembly config: ${error}. Continuing without it.`);
+    return EMPTY_ASSEMBLY_CONFIG;
+  }
+  return cfg;
+}
+
+/**
+ * True when `content` references `filePath` by any path-suffix aligned to a
+ * segment boundary (so a config path `backend/docs/rules/agent-security.md`
+ * matches an in-prompt reference `docs/rules/agent-security.md` or the bare
+ * basename). The customer opts in via config, so suffix matching is acceptable.
+ */
+export function promptReferencesPath(content: string, filePath: string): boolean {
+  const segs = filePath.split('/').filter(Boolean);
+  for (let i = 0; i < segs.length; i++) {
+    if (content.includes(segs.slice(i).join('/'))) return true;
+  }
+  return false;
+}
+
+/**
+ * For each configured `inject_when_referenced` path that the prompt references,
+ * read the file at `commitSha` and append it as a `## Reference: <path>` section
+ * (same mechanism as skill/companion bundling). Graceful: never throws.
+ */
+export function resolveSharedReferences(
+  content: string,
+  commitSha: string,
+  config: AssemblyConfig,
+): { assembled: string; injected: string[] } {
+  try {
+    const paths = config?.injectWhenReferenced || [];
+    if (paths.length === 0) return { assembled: content, injected: [] };
+
+    const injected: string[] = [];
+    let assembled = content;
+    let totalBytes = 0;
+
+    for (const refPath of paths) {
+      if (injected.length >= MAX_REFERENCES_PER_PROMPT) break;
+      if (!promptReferencesPath(content, refPath)) continue;          // only inject if actually referenced
+      if (assembled.includes(`## Reference: ${refPath}`)) continue;   // dedupe
+      const body = gitShowFile(commitSha, refPath);
+      if (body === null) {
+        core.warning(`  Reference injection: could not read "${refPath}" at ${commitSha}; skipping.`);
+        continue;
+      }
+      const bodyBytes = Buffer.byteLength(body, 'utf-8');
+      if (totalBytes + bodyBytes > MAX_REFERENCES_BYTES) {
+        core.warning(`  Reference injection: byte cap reached; dropped "${refPath}".`);
+        continue;
+      }
+      totalBytes += bodyBytes;
+      assembled += `\n\n---\n\n## Reference: ${refPath}\n\n${body}\n`;
+      injected.push(refPath);
+    }
+    if (injected.length > 0) core.info(`  Injected ${injected.length} reference(s): ${injected.join(', ')}`);
+    return { assembled, injected };
+  } catch (error) {
+    core.warning(`Reference injection failed: ${error}. Continuing with raw content.`);
+    return { assembled: content, injected: [] };
+  }
+}
+
+/**
+ * Deterministic convention check (WS-2): for each `require_reference` rule whose
+ * `for` glob matches `filePath`, verify the (original, pre-injection) prompt
+ * references the file. Returns the rules that were violated. No LLM.
+ */
+export function checkRequiredReferences(
+  content: string,
+  filePath: string,
+  config: AssemblyConfig,
+): SharedReferenceRequirement[] {
+  const violations: SharedReferenceRequirement[] = [];
+  for (const req of config?.requireReference || []) {
+    if (!req.file) continue;
+    if (!minimatch(filePath, req.for, { dot: true })) continue;
+    if (!promptReferencesPath(content, req.file)) violations.push(req);
+  }
+  return violations;
+}
+
+/**
+ * Derive the provenance manifest (WS-3) from an assembled blob by locating the
+ * bundled section headers we appended (`## Skill:` / `## Companion file:` /
+ * `## Reference:`, each preceded by the `---` separator). Each segment's
+ * `blobStartLine` is the 1-based line where that section's BODY begins; the main
+ * file owns everything before the first section. Sent to the engine so it can map
+ * model-reported blob lines back to (sourceFile, sourceLine).
+ */
+export function buildSegmentManifest(assembled: string, mainSource: string, knownSections?: Set<string>): Segment[] {
+  const lines = assembled.split('\n');
+  const segments: Segment[] = [{ source: mainSource, kind: 'main', blobStartLine: 1, sourceStartLine: 1 }];
+  const headerRe = /^## (Skill|Companion file|Reference): (.+)$/;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(headerRe);
+    if (!m) continue;
+    // Require the bundling separator immediately before: blank line then '---'.
+    if (lines[i - 1] !== '' || lines[i - 2] !== '---') continue;
+    const name = m[2].trim();
+    // Guard against a body line that merely looks like a section header: only accept
+    // names we actually bundled. When the caller can't supply the set, fall back to
+    // the separator heuristic above.
+    if (knownSections && !knownSections.has(name)) continue;
+    const kind: Segment['kind'] = m[1] === 'Skill' ? 'skill' : m[1] === 'Companion file' ? 'sibling' : 'reference';
+    // Header at 1-based line i+1; blank at i+2; body starts at i+3.
+    segments.push({ source: name, kind, blobStartLine: i + 3, sourceStartLine: 1 });
+  }
+  return segments;
 }

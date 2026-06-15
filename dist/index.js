@@ -156,6 +156,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.EMPTY_ASSEMBLY_CONFIG = void 0;
 exports.fetchFileVersions = fetchFileVersions;
 exports.gitShowFile = gitShowFile;
 exports.fetchFileFromDisk = fetchFileFromDisk;
@@ -163,10 +164,16 @@ exports.resolveTemplateVariables = resolveTemplateVariables;
 exports.gitListDir = gitListDir;
 exports.bundleSkillsForPrompt = bundleSkillsForPrompt;
 exports.bundleSiblingsForPrompt = bundleSiblingsForPrompt;
+exports.parseAssemblyConfig = parseAssemblyConfig;
+exports.promptReferencesPath = promptReferencesPath;
+exports.resolveSharedReferences = resolveSharedReferences;
+exports.checkRequiredReferences = checkRequiredReferences;
+exports.buildSegmentManifest = buildSegmentManifest;
 const child_process_1 = __nccwpck_require__(5317);
 const fs_1 = __nccwpck_require__(9896);
 const path = __importStar(__nccwpck_require__(6928));
 const core = __importStar(__nccwpck_require__(7484));
+const minimatch_1 = __nccwpck_require__(6507);
 /**
  * Fetches the "after" (PR head) and "before" (base branch) content
  * of a prompt file. Uses git CLI to avoid GitHub API size limits.
@@ -477,6 +484,208 @@ function bundleSiblingsForPrompt(content, filePath, commitSha, patterns) {
         return { assembled: content, bundled: [] };
     }
 }
+exports.EMPTY_ASSEMBLY_CONFIG = { injectWhenReferenced: [], requireReference: [] };
+const MAX_REFERENCES_PER_PROMPT = 10;
+const MAX_REFERENCES_BYTES = 100 * 1024;
+function stripYamlComment(line) {
+    if (line.trimStart().startsWith('#'))
+        return '';
+    const m = line.match(/\s#/);
+    return m && m.index !== undefined ? line.slice(0, m.index) : line;
+}
+function unquote(s) {
+    return s.trim().replace(/^['"]/, '').replace(/['"]$/, '').trim();
+}
+function applyRequireKv(item, key, val) {
+    if (key === 'file')
+        item.file = val;
+    else if (key === 'for')
+        item.for = val;
+    else if (key === 'severity')
+        item.severity = val === 'suggestion' ? 'suggestion' : 'critical';
+}
+/**
+ * Zero-dependency parser for the minimal assembly-config schema:
+ *
+ *   inject_when_referenced:
+ *     - backend/docs/rules/agent-security.md
+ *   require_reference:
+ *     - file: backend/docs/rules/agent-security.md
+ *       for: "backend/app/llm/**\/*prompt*.md"
+ *       severity: critical
+ *
+ * Tolerant of comments, blank lines, and quotes. Unknown keys are ignored.
+ * Never throws — returns whatever it could parse.
+ */
+function parseAssemblyConfig(raw) {
+    const cfg = { injectWhenReferenced: [], requireReference: [] };
+    if (!raw || !raw.trim())
+        return cfg;
+    let section = null;
+    let current = null;
+    const flush = () => {
+        if (current && current.file) {
+            cfg.requireReference.push({
+                file: current.file,
+                for: current.for || '**',
+                severity: current.severity === 'suggestion' ? 'suggestion' : 'critical',
+            });
+        }
+        current = null;
+    };
+    try {
+        for (const rawLine of raw.split('\n')) {
+            const line = stripYamlComment(rawLine).replace(/\s+$/, '');
+            if (!line.trim())
+                continue;
+            // Top-level key (no indentation)
+            const topKey = !/^\s/.test(line) && line.match(/^([a-zA-Z_][\w]*):\s*$/);
+            if (topKey) {
+                flush();
+                section = topKey[1] === 'inject_when_referenced' ? 'inject'
+                    : topKey[1] === 'require_reference' ? 'require' : null;
+                continue;
+            }
+            if (!/^\s/.test(line)) {
+                flush();
+                section = null;
+                continue;
+            }
+            const trimmed = line.trim();
+            if (section === 'inject') {
+                const m = trimmed.match(/^-\s*(.+)$/);
+                if (m)
+                    cfg.injectWhenReferenced.push(unquote(m[1]));
+            }
+            else if (section === 'require') {
+                const itemStart = trimmed.match(/^-\s*(.*)$/);
+                if (itemStart) {
+                    flush();
+                    current = {};
+                    const kv = itemStart[1].match(/^([a-zA-Z_]+):\s*(.*)$/);
+                    if (kv)
+                        applyRequireKv(current, kv[1], unquote(kv[2]));
+                }
+                else {
+                    const kv = trimmed.match(/^([a-zA-Z_]+):\s*(.*)$/);
+                    if (kv && current)
+                        applyRequireKv(current, kv[1], unquote(kv[2]));
+                }
+            }
+        }
+        flush();
+    }
+    catch (error) {
+        core.warning(`Failed to parse assembly config: ${error}. Continuing without it.`);
+        return exports.EMPTY_ASSEMBLY_CONFIG;
+    }
+    return cfg;
+}
+/**
+ * True when `content` references `filePath` by any path-suffix aligned to a
+ * segment boundary (so a config path `backend/docs/rules/agent-security.md`
+ * matches an in-prompt reference `docs/rules/agent-security.md` or the bare
+ * basename). The customer opts in via config, so suffix matching is acceptable.
+ */
+function promptReferencesPath(content, filePath) {
+    const segs = filePath.split('/').filter(Boolean);
+    for (let i = 0; i < segs.length; i++) {
+        if (content.includes(segs.slice(i).join('/')))
+            return true;
+    }
+    return false;
+}
+/**
+ * For each configured `inject_when_referenced` path that the prompt references,
+ * read the file at `commitSha` and append it as a `## Reference: <path>` section
+ * (same mechanism as skill/companion bundling). Graceful: never throws.
+ */
+function resolveSharedReferences(content, commitSha, config) {
+    try {
+        const paths = config?.injectWhenReferenced || [];
+        if (paths.length === 0)
+            return { assembled: content, injected: [] };
+        const injected = [];
+        let assembled = content;
+        let totalBytes = 0;
+        for (const refPath of paths) {
+            if (injected.length >= MAX_REFERENCES_PER_PROMPT)
+                break;
+            if (!promptReferencesPath(content, refPath))
+                continue; // only inject if actually referenced
+            if (assembled.includes(`## Reference: ${refPath}`))
+                continue; // dedupe
+            const body = gitShowFile(commitSha, refPath);
+            if (body === null) {
+                core.warning(`  Reference injection: could not read "${refPath}" at ${commitSha}; skipping.`);
+                continue;
+            }
+            const bodyBytes = Buffer.byteLength(body, 'utf-8');
+            if (totalBytes + bodyBytes > MAX_REFERENCES_BYTES) {
+                core.warning(`  Reference injection: byte cap reached; dropped "${refPath}".`);
+                continue;
+            }
+            totalBytes += bodyBytes;
+            assembled += `\n\n---\n\n## Reference: ${refPath}\n\n${body}\n`;
+            injected.push(refPath);
+        }
+        if (injected.length > 0)
+            core.info(`  Injected ${injected.length} reference(s): ${injected.join(', ')}`);
+        return { assembled, injected };
+    }
+    catch (error) {
+        core.warning(`Reference injection failed: ${error}. Continuing with raw content.`);
+        return { assembled: content, injected: [] };
+    }
+}
+/**
+ * Deterministic convention check (WS-2): for each `require_reference` rule whose
+ * `for` glob matches `filePath`, verify the (original, pre-injection) prompt
+ * references the file. Returns the rules that were violated. No LLM.
+ */
+function checkRequiredReferences(content, filePath, config) {
+    const violations = [];
+    for (const req of config?.requireReference || []) {
+        if (!req.file)
+            continue;
+        if (!(0, minimatch_1.minimatch)(filePath, req.for, { dot: true }))
+            continue;
+        if (!promptReferencesPath(content, req.file))
+            violations.push(req);
+    }
+    return violations;
+}
+/**
+ * Derive the provenance manifest (WS-3) from an assembled blob by locating the
+ * bundled section headers we appended (`## Skill:` / `## Companion file:` /
+ * `## Reference:`, each preceded by the `---` separator). Each segment's
+ * `blobStartLine` is the 1-based line where that section's BODY begins; the main
+ * file owns everything before the first section. Sent to the engine so it can map
+ * model-reported blob lines back to (sourceFile, sourceLine).
+ */
+function buildSegmentManifest(assembled, mainSource, knownSections) {
+    const lines = assembled.split('\n');
+    const segments = [{ source: mainSource, kind: 'main', blobStartLine: 1, sourceStartLine: 1 }];
+    const headerRe = /^## (Skill|Companion file|Reference): (.+)$/;
+    for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(headerRe);
+        if (!m)
+            continue;
+        // Require the bundling separator immediately before: blank line then '---'.
+        if (lines[i - 1] !== '' || lines[i - 2] !== '---')
+            continue;
+        const name = m[2].trim();
+        // Guard against a body line that merely looks like a section header: only accept
+        // names we actually bundled. When the caller can't supply the set, fall back to
+        // the separator heuristic above.
+        if (knownSections && !knownSections.has(name))
+            continue;
+        const kind = m[1] === 'Skill' ? 'skill' : m[1] === 'Companion file' ? 'sibling' : 'reference';
+        // Header at 1-based line i+1; blank at i+2; body starts at i+3.
+        segments.push({ source: name, kind, blobStartLine: i + 3, sourceStartLine: 1 });
+    }
+    return segments;
+}
 //# sourceMappingURL=file-fetcher.js.map
 
 /***/ }),
@@ -650,6 +859,7 @@ async function run() {
             .map(s => s.trim())
             .filter(Boolean);
         const bundleSiblings = core.getInput('bundle_siblings').trim().toLowerCase() === 'true';
+        const assemblyConfigPath = core.getInput('assembly_config');
         // Mask the API key in logs
         core.setSecret(apiKey);
         // Read system overview file if provided
@@ -682,6 +892,18 @@ async function run() {
                 core.warning(`Custom principles file not found at ${customPrinciplesPath}: ${message}. Continuing without it.`);
             }
         }
+        // Read assembly config (minimal exception-list for abnormal reference injection + convention checks)
+        let assemblyConfig = file_fetcher_1.EMPTY_ASSEMBLY_CONFIG;
+        if (assemblyConfigPath) {
+            try {
+                assemblyConfig = (0, file_fetcher_1.parseAssemblyConfig)((0, fs_1.readFileSync)(assemblyConfigPath, 'utf-8'));
+                core.info(`Loaded assembly config from ${assemblyConfigPath} (${assemblyConfig.injectWhenReferenced.length} injectable reference(s), ${assemblyConfig.requireReference.length} required-reference rule(s))`);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                core.warning(`Assembly config not found at ${assemblyConfigPath}: ${message}. Continuing without it.`);
+            }
+        }
         // Determine mode
         const eventName = github.context.eventName;
         const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target' || !!prNumberInput;
@@ -696,7 +918,7 @@ async function run() {
                     'Use file_pattern for glob matching (e.g. "**/*system-prompt*.md") ' +
                     'or prompt_path for directory prefix matching (e.g. "prompts/").');
             }
-            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings);
+            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig);
         }
         else {
             await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
@@ -708,7 +930,7 @@ async function run() {
     }
 }
 // ---- PR Mode ----
-async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode = 'review', skillsDirs = [], bundleSiblings = false) {
+async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode = 'review', skillsDirs = [], bundleSiblings = false, assemblyConfig = file_fetcher_1.EMPTY_ASSEMBLY_CONFIG) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
         throw new Error('GITHUB_TOKEN environment variable is required for PR mode');
@@ -776,6 +998,8 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     // Per-file record of what got bundled in (skills + sibling filenames), used
     // for the PR-comment footer so reviewers can see what context was attached.
     const bundledByFile = new Map();
+    // Deterministic convention-check violations (WS-2), keyed by file path.
+    const referenceViolationsByFile = new Map();
     const siblingPatterns = ['*prompt*.md', '*addendum*.md'];
     for (const change of changedFiles) {
         const { before, after } = (0, file_fetcher_1.fetchFileVersions)(change, baseSha, headSha);
@@ -804,15 +1028,35 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 assembledBefore = (0, file_fetcher_1.bundleSiblingsForPrompt)(assembledBefore, beforePath, baseSha, siblingPatterns).assembled;
             }
         }
+        // Shared-reference injection (WS-1) — dual-sided, same treatment as skills/siblings
+        // so the diff sees consistent assembled content. Config-driven exception list only.
+        const refResult = (0, file_fetcher_1.resolveSharedReferences)(assembledAfter, headSha, assemblyConfig);
+        assembledAfter = refResult.assembled;
+        const injectedRefs = refResult.injected;
+        if (assembledBefore !== null) {
+            assembledBefore = (0, file_fetcher_1.resolveSharedReferences)(assembledBefore, baseSha, assemblyConfig).assembled;
+        }
+        // Deterministic convention check (WS-2) — run on the AUTHORED content (pre-injection)
+        // so we verify the author wrote the reference, not that we injected it.
+        const violations = (0, file_fetcher_1.checkRequiredReferences)(after, change.filename, assemblyConfig);
+        if (violations.length > 0) {
+            referenceViolationsByFile.set(change.filename, violations);
+            core.info(`  Convention check: ${violations.length} missing required reference(s) in ${change.filename}`);
+        }
         if (fileBundled.skills.length > 0 || fileBundled.siblings.length > 0) {
             bundledByFile.set(change.filename, fileBundled);
         }
+        // Provenance manifest (WS-3) — authoritative: only headers for sections we
+        // actually bundled become segments. Only sent when something was bundled.
+        const knownSections = new Set([...fileBundled.skills, ...fileBundled.siblings, ...injectedRefs]);
+        const segments = (0, file_fetcher_1.buildSegmentManifest)(assembledAfter, change.filename, knownSections);
         apiFiles.push({
             path: change.filename,
             name: (0, path_1.basename)(change.filename),
             status: change.status,
             after: assembledAfter,
             before: assembledBefore,
+            segments: segments.length > 1 ? segments : undefined,
         });
     }
     // Step 3: Call Lambda API (one file at a time to avoid connection timeout on large PRs)
@@ -847,6 +1091,21 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             errors.push(`${file.name}: ${msg}`);
             core.warning(`Failed to review ${file.name}: ${msg}. Skipping.`);
         }
+    }
+    // Attach deterministic convention findings (WS-2) to the matching file result.
+    // Works even for new files in review mode (the API returns an N/A result we can append to).
+    for (const result of allResults) {
+        const violations = referenceViolationsByFile.get(result.file);
+        if (!violations || violations.length === 0)
+            continue;
+        const items = violations.map(v => ({
+            change: `Missing required reference to \`${v.file}\``,
+            impact: `Team convention requires prompts matching \`${v.for}\` to reference \`${v.file}\`, but this prompt does not.`,
+            effect: 'negative',
+            severity: v.severity,
+            category: 'Team convention',
+        }));
+        result.changeSummary = [...(result.changeSummary ?? []), ...items];
     }
     if (allResults.length === 0) {
         throw new Error(`All ${apiFiles.length} file(s) failed: ${errors.join('; ')}`);
@@ -1311,15 +1570,27 @@ function formatRevertSection(changeSummary) {
     }
     return md;
 }
+/**
+ * Render a finding's location with source-file provenance (WS-3). Shows the line
+ * range; when the finding resolves to a bundled file NOT under review, names that
+ * file and marks it out-of-scope; when no line could be anchored, says file-level.
+ */
+function formatLocation(cs) {
+    const hasLine = cs.startLine > 0;
+    const lineRef = cs.startLine === cs.endLine ? `${cs.startLine}` : `${cs.startLine}-${cs.endLine}`;
+    if (cs.sourceFile && cs.sourceInChangeSet === false) {
+        return hasLine
+            ? `in \`${cs.sourceFile}\` line ${lineRef} — bundled file, not changed by this PR`
+            : `in \`${cs.sourceFile}\` — bundled file, not changed by this PR`;
+    }
+    return hasLine ? `line ${lineRef}` : 'file-level';
+}
 function formatFindingDetail(finding, factorId) {
     let md = '';
     const anchorId = factorId ? `${factorId}-${finding.findingNumber}` : '';
     const title = finding.codeSnippet?.issue || finding.description;
     if (finding.codeSnippet && finding.codeSnippet.code.trim()) {
-        const lineRef = finding.codeSnippet.startLine === finding.codeSnippet.endLine
-            ? `${finding.codeSnippet.startLine}`
-            : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
-        md += `**<u>${finding.findingNumber}. ${title} (line ${lineRef})</u>**\n\n`;
+        md += `**<u>${finding.findingNumber}. ${title} (${formatLocation(finding.codeSnippet)})</u>**\n\n`;
         const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
         if (cleanedCode.trim()) {
             const codeFence = getCodeFence(cleanedCode);

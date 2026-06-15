@@ -349,6 +349,22 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
   return md;
 }
 
+/**
+ * Render a finding's location with source-file provenance (WS-3). Shows the line
+ * range; when the finding resolves to a bundled file NOT under review, names that
+ * file and marks it out-of-scope; when no line could be anchored, says file-level.
+ */
+function formatLocation(cs: NonNullable<Finding['codeSnippet']>): string {
+  const hasLine = cs.startLine > 0;
+  const lineRef = cs.startLine === cs.endLine ? `${cs.startLine}` : `${cs.startLine}-${cs.endLine}`;
+  if (cs.sourceFile && cs.sourceInChangeSet === false) {
+    return hasLine
+      ? `in \`${cs.sourceFile}\` line ${lineRef} — bundled file, not changed by this PR`
+      : `in \`${cs.sourceFile}\` — bundled file, not changed by this PR`;
+  }
+  return hasLine ? `line ${lineRef}` : 'file-level';
+}
+
 function formatFindingDetail(finding: Finding, factorId?: string): string {
   let md = '';
   const anchorId = factorId ? `${factorId}-${finding.findingNumber}` : '';
@@ -356,10 +372,7 @@ function formatFindingDetail(finding: Finding, factorId?: string): string {
   const title = finding.codeSnippet?.issue || finding.description;
 
   if (finding.codeSnippet && finding.codeSnippet.code.trim()) {
-    const lineRef = finding.codeSnippet.startLine === finding.codeSnippet.endLine
-      ? `${finding.codeSnippet.startLine}`
-      : `${finding.codeSnippet.startLine}-${finding.codeSnippet.endLine}`;
-    md += `**<u>${finding.findingNumber}. ${title} (line ${lineRef})</u>**\n\n`;
+    md += `**<u>${finding.findingNumber}. ${title} (${formatLocation(finding.codeSnippet)})</u>**\n\n`;
 
     const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
     if (cleanedCode.trim()) {
