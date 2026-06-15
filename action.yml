@@ -46,6 +46,10 @@ inputs:
     description: 'When "true", bundle sibling `*prompt*.md` and `*addendum*.md` files from the same directory as each reviewed prompt. Catches paired system/user prompts and runtime addendums. Optional, default false.'
     required: false
     default: 'false'
+  assembly_config:
+    description: 'Path to a minimal YAML exception-list (e.g. .github/hosho/assembly.yml) declaring abnormal shared references to inject when a prompt references them (inject_when_referenced) and/or references a prompt must contain (require_reference). For shared docs that are not backtick skill tokens (e.g. docs/rules/agent-security.md). Optional.'
+    required: false
+    default: ''
   pr_number:
     description: 'PR number (required when triggered via issue_comment slash command)'
     required: false

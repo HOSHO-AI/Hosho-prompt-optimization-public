@@ -4,7 +4,11 @@ import { basename } from 'path';
 import { readFileSync } from 'fs';
 import { createTwoFilesPatch } from 'diff';
 import { identifyChangedPromptFiles } from './file-identifier';
-import { fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, bundleSiblingsForPrompt } from './file-fetcher';
+import {
+  fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, bundleSiblingsForPrompt,
+  resolveSharedReferences, checkRequiredReferences, parseAssemblyConfig, buildSegmentManifest,
+  AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, SharedReferenceRequirement,
+} from './file-fetcher';
 import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
   formatPRComment,
@@ -14,7 +18,7 @@ import {
   formatOnDemandSummary,
   BOT_MARKER,
 } from './output-formatter';
-import { ComparisonResult } from './types';
+import { ComparisonResult, ChangeItem } from './types';
 
 /**
  * Strip boilerplate from custom principles file: HTML comments and # headings.
@@ -64,6 +68,7 @@ async function run(): Promise<void> {
       .map(s => s.trim())
       .filter(Boolean);
     const bundleSiblings = core.getInput('bundle_siblings').trim().toLowerCase() === 'true';
+    const assemblyConfigPath = core.getInput('assembly_config');
 
     // Mask the API key in logs
     core.setSecret(apiKey);
@@ -97,6 +102,18 @@ async function run(): Promise<void> {
       }
     }
 
+    // Read assembly config (minimal exception-list for abnormal reference injection + convention checks)
+    let assemblyConfig: AssemblyConfig = EMPTY_ASSEMBLY_CONFIG;
+    if (assemblyConfigPath) {
+      try {
+        assemblyConfig = parseAssemblyConfig(readFileSync(assemblyConfigPath, 'utf-8'));
+        core.info(`Loaded assembly config from ${assemblyConfigPath} (${assemblyConfig.injectWhenReferenced.length} injectable reference(s), ${assemblyConfig.requireReference.length} required-reference rule(s))`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        core.warning(`Assembly config not found at ${assemblyConfigPath}: ${message}. Continuing without it.`);
+      }
+    }
+
     // Determine mode
     const eventName = github.context.eventName;
     const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target' || !!prNumberInput;
@@ -116,7 +133,7 @@ async function run(): Promise<void> {
           'or prompt_path for directory prefix matching (e.g. "prompts/").'
         );
       }
-      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings);
+      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig);
     } else {
       await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
     }
@@ -140,6 +157,7 @@ async function runPRMode(
   outputMode: 'review' | 'improve' = 'review',
   skillsDirs: string[] = [],
   bundleSiblings: boolean = false,
+  assemblyConfig: AssemblyConfig = EMPTY_ASSEMBLY_CONFIG,
 ): Promise<void> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -221,6 +239,8 @@ async function runPRMode(
   // Per-file record of what got bundled in (skills + sibling filenames), used
   // for the PR-comment footer so reviewers can see what context was attached.
   const bundledByFile = new Map<string, { skills: string[]; siblings: string[] }>();
+  // Deterministic convention-check violations (WS-2), keyed by file path.
+  const referenceViolationsByFile = new Map<string, SharedReferenceRequirement[]>();
 
   const siblingPatterns = ['*prompt*.md', '*addendum*.md'];
 
@@ -256,9 +276,31 @@ async function runPRMode(
       }
     }
 
+    // Shared-reference injection (WS-1) — dual-sided, same treatment as skills/siblings
+    // so the diff sees consistent assembled content. Config-driven exception list only.
+    const refResult = resolveSharedReferences(assembledAfter, headSha, assemblyConfig);
+    assembledAfter = refResult.assembled;
+    const injectedRefs = refResult.injected;
+    if (assembledBefore !== null) {
+      assembledBefore = resolveSharedReferences(assembledBefore, baseSha, assemblyConfig).assembled;
+    }
+
+    // Deterministic convention check (WS-2) — run on the AUTHORED content (pre-injection)
+    // so we verify the author wrote the reference, not that we injected it.
+    const violations = checkRequiredReferences(after, change.filename, assemblyConfig);
+    if (violations.length > 0) {
+      referenceViolationsByFile.set(change.filename, violations);
+      core.info(`  Convention check: ${violations.length} missing required reference(s) in ${change.filename}`);
+    }
+
     if (fileBundled.skills.length > 0 || fileBundled.siblings.length > 0) {
       bundledByFile.set(change.filename, fileBundled);
     }
+
+    // Provenance manifest (WS-3) — authoritative: only headers for sections we
+    // actually bundled become segments. Only sent when something was bundled.
+    const knownSections = new Set<string>([...fileBundled.skills, ...fileBundled.siblings, ...injectedRefs]);
+    const segments = buildSegmentManifest(assembledAfter, change.filename, knownSections);
 
     apiFiles.push({
       path: change.filename,
@@ -266,6 +308,7 @@ async function runPRMode(
       status: change.status,
       after: assembledAfter,
       before: assembledBefore,
+      segments: segments.length > 1 ? segments : undefined,
     });
   }
 
@@ -302,6 +345,21 @@ async function runPRMode(
       errors.push(`${file.name}: ${msg}`);
       core.warning(`Failed to review ${file.name}: ${msg}. Skipping.`);
     }
+  }
+
+  // Attach deterministic convention findings (WS-2) to the matching file result.
+  // Works even for new files in review mode (the API returns an N/A result we can append to).
+  for (const result of allResults) {
+    const violations = referenceViolationsByFile.get(result.file);
+    if (!violations || violations.length === 0) continue;
+    const items: ChangeItem[] = violations.map(v => ({
+      change: `Missing required reference to \`${v.file}\``,
+      impact: `Team convention requires prompts matching \`${v.for}\` to reference \`${v.file}\`, but this prompt does not.`,
+      effect: 'negative' as const,
+      severity: v.severity,
+      category: 'Team convention',
+    }));
+    result.changeSummary = [...(result.changeSummary ?? []), ...items];
   }
 
   if (allResults.length === 0) {

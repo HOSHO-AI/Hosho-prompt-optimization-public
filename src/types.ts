@@ -41,6 +41,8 @@ export interface Finding {
     endLine: number;
     issue: string;
     code: string;
+    sourceFile?: string;
+    sourceInChangeSet?: boolean;
   };
   consideration: string;
   rewrittenCode?: string;
@@ -84,6 +86,15 @@ export interface SynthesisResult {
   factorInsights: FactorInsight[];
 }
 
+// ---- Assembly provenance manifest (mirrors engine Segment) ----
+
+export interface Segment {
+  source: string;
+  kind: 'main' | 'skill' | 'sibling' | 'reference';
+  blobStartLine: number;
+  sourceStartLine: number;
+}
+
 // ---- Change Summary (from batch diff) ----
 
 export interface ChangeItem {
@@ -99,6 +110,8 @@ export interface ChangeItem {
     endLine: number;
     suggestedFix: string;
     rewrittenCode: string;
+    sourceFile?: string;
+    sourceInChangeSet?: boolean;
   };
 }
 
