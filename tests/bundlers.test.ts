@@ -141,6 +141,7 @@ describe('bundleSiblingsForPrompt', () => {
     process.chdir(repo);
     writeAndCommit(repo, {
       'agents/coding/system-prompt.md': 'SYSTEM PROMPT BODY',
+      'agents/coding/system-prompt-nextjs.md': 'NEXTJS SYSTEM PROMPT BODY',
       'agents/coding/user-prompt.md': 'USER PROMPT BODY',
       'agents/coding/user-prompt-nextjs.md': 'NEXTJS USER PROMPT BODY',
       'agents/coding/draft-addendum.md': 'DRAFT ADDENDUM BODY',
@@ -191,6 +192,34 @@ describe('bundleSiblingsForPrompt', () => {
       ['*prompt*.md'],
     );
     expect(bundled).not.toContain('system-prompt.md');
+  });
+
+  it('does NOT bundle a sibling system-prompt when reviewing a system-prompt (different agent)', () => {
+    const sha = execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+    // Reviewing the Next.js agent must NOT pull in system-prompt.md (the HTML agent) —
+    // they are framework-selected alternatives, never co-run. But the paired user-prompt
+    // and addenda are still bundled.
+    const fwd = bundleSiblingsForPrompt(
+      'NEXTJS SYSTEM PROMPT',
+      'agents/coding/system-prompt-nextjs.md',
+      sha,
+      ['*prompt*.md', '*addendum*.md'],
+    );
+    expect(fwd.bundled).not.toContain('system-prompt.md');
+    expect(fwd.assembled).not.toContain('## Companion file: system-prompt.md');
+    expect(fwd.assembled).not.toContain('SYSTEM PROMPT BODY'); // HTML agent's body must be absent
+    expect(fwd.bundled).toContain('user-prompt-nextjs.md');
+    expect(fwd.bundled).toContain('draft-addendum.md');
+
+    // Reverse: reviewing the HTML agent must not pull in the Next.js system prompt.
+    const rev = bundleSiblingsForPrompt(
+      'HTML SYSTEM PROMPT',
+      'agents/coding/system-prompt.md',
+      sha,
+      ['*prompt*.md', '*addendum*.md'],
+    );
+    expect(rev.bundled).not.toContain('system-prompt-nextjs.md');
+    expect(rev.assembled).not.toContain('NEXTJS SYSTEM PROMPT BODY');
   });
 
   it('does not recurse into subdirectories', () => {

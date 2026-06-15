@@ -438,9 +438,20 @@ function bundleSiblingsForPrompt(content, filePath, commitSha, patterns) {
         if (!entries) {
             return { assembled: content, bundled: [] };
         }
+        // A system-prompt is one agent's complete definition. A sibling system-prompt is a
+        // DIFFERENT agent — e.g. system-prompt.md (HTML/Vite) vs system-prompt-nextjs.md
+        // (Next.js), which are selected one-or-the-other by framework at runtime and never
+        // co-run. Bundling another agent's system prompt as "companion context" makes the
+        // reviewer treat its content as still-present in THIS agent, producing false coverage
+        // ("removed X is still covered" when X only survives in the other agent). So when the
+        // file under review is a system-prompt, never bundle another system-prompt sibling.
+        const isSystemPrompt = (name) => /system-prompt/i.test(name);
+        const reviewingSystemPrompt = isSystemPrompt(base);
         const compiled = patterns.map(globToRegex);
         const matching = entries.filter(e => {
             if (e === base)
+                return false;
+            if (reviewingSystemPrompt && isSystemPrompt(e))
                 return false;
             return compiled.some(r => r.test(e));
         });
