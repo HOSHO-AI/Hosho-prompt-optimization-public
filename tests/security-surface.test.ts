@@ -4,6 +4,7 @@ import {
   checkRequiredReferences,
   refineReferenceViolations,
   checkRemovedReferences,
+  evaluateReferenceConvention,
   hasSecuritySurface,
   hasInlineSecurityRules,
   isStructurallyExempt,
@@ -20,14 +21,16 @@ require_reference:
     severity: critical
 `);
 
-// IMPROVE mode: absolute spec primitive → content-aware refinement (advisory only).
+// Drive through the real per-mode composition (evaluateReferenceConvention), the same
+// path index.ts uses. `improve` with no before = the absolute full-assessment case.
 function improve(content: string, filePath: string) {
-  return refineReferenceViolations(content, filePath, checkRequiredReferences(content, filePath, CFG));
+  return evaluateReferenceConvention(null, content, filePath, CFG, 'improve');
 }
-
-// REVIEW mode: diff regression — only a removed reference is flagged (config severity).
+function improveDiff(before: string | null, after: string, filePath: string) {
+  return evaluateReferenceConvention(before, after, filePath, CFG, 'improve');
+}
 function reviewDiff(before: string | null, after: string, filePath: string) {
-  return checkRemovedReferences(before, after, filePath, CFG);
+  return evaluateReferenceConvention(before, after, filePath, CFG, 'review');
 }
 
 // ---- Corpus snippets (grounded in real appsmith-v2 prompts) -----------------
@@ -217,5 +220,55 @@ describe('reviewDiff() — review mode flags ONLY a removed reference', () => {
       // before === after (no security-reference change) → no removal
       expect(reviewDiff('Role: agent.', 'Role: agent.\n---\ndescription: x\n---', f)).toHaveLength(0);
     }
+  });
+});
+
+describe('improve mode mirrors the standard pipeline: full assessment + diff regression', () => {
+  const file = 'backend/app/llm/coding_agent/system-prompt.md';
+  // A sandbox agent (allowed_skills) that links the doc AND inlines the rules.
+  const COVERED_WITH_LINK = `---
+allowed_skills: null
+---
+See \`docs/rules/agent-security.md\`. Do not create API proxy or relay endpoints; do not read
+environment variables containing KEY/SECRET/TOKEN.`;
+  // Same agent, link removed, but the inline rules remain (absolute check would say "covered").
+  const LINK_REMOVED_INLINE_KEPT = `---
+allowed_skills: null
+---
+Do not create API proxy or relay endpoints; do not read environment variables containing KEY/SECRET/TOKEN.`;
+  // Same agent, link removed AND no inline rules left (genuinely non-compliant now).
+  const LINK_REMOVED_NOTHING_LEFT = `---
+allowed_skills: null
+---
+Role: Kite coding agent. You handle general implementation tasks.`;
+
+  it('THE GAP v1.38.0 missed: removal with inline rules still present → improve flags the REMOVAL', () => {
+    // Absolute check alone would suppress (inline rules present) — but the standard diff
+    // analysis would flag the removal in improve mode, so we must too.
+    expect(refineReferenceViolations(LINK_REMOVED_INLINE_KEPT, file,
+      checkRequiredReferences(LINK_REMOVED_INLINE_KEPT, file, CFG))).toHaveLength(0); // absolute alone: silent
+    const out = improveDiff(COVERED_WITH_LINK, LINK_REMOVED_INLINE_KEPT, file);
+    expect(out).toHaveLength(1);
+    expect(out[0].reason).toBe('removed-reference');
+    expect(out[0].severity).toBe('critical'); // removal honors config severity
+  });
+
+  it('removal AND now non-compliant → exactly ONE finding (removal wins, not double-counted)', () => {
+    const out = improveDiff(COVERED_WITH_LINK, LINK_REMOVED_NOTHING_LEFT, file);
+    expect(out).toHaveLength(1);
+    expect(out[0].reason).toBe('removed-reference');
+  });
+
+  it('pre-existing gap (no before, never linked, no inline) → absolute advisory only', () => {
+    const out = improveDiff(null, LINK_REMOVED_NOTHING_LEFT, file);
+    expect(out).toHaveLength(1);
+    expect(out[0].reason).not.toBe('removed-reference');
+    expect(out[0].severity).toBe('suggestion');
+  });
+
+  it('review mode of the same removal also flags it (parity)', () => {
+    const out = reviewDiff(COVERED_WITH_LINK, LINK_REMOVED_INLINE_KEPT, file);
+    expect(out).toHaveLength(1);
+    expect(out[0].reason).toBe('removed-reference');
   });
 });

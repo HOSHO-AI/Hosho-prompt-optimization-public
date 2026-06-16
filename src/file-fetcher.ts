@@ -162,8 +162,13 @@ export function resolveTemplateVariables(
       core.info(`  Resolved template {{ ${varName} }} from ${matchedPath}`);
     }
 
-    // Strip Jinja2 comments from the resolved content
-    resolved = resolved.replace(JINJA_COMMENT_REGEX, '');
+    // Strip Jinja2 comments from the resolved content, but PRESERVE line count:
+    // replace each comment with the same number of newlines it spanned. Deleting
+    // them would shift every subsequent line, and the provenance manifest's main
+    // segment is 1:1 — so the engine would mis-cite line numbers for any prompt
+    // that has both {# #} comments and {{ }} placeholders (M1; see
+    // prompt-assembly/SPEC.md §6). Blanking instead of deleting keeps lines aligned.
+    resolved = resolved.replace(JINJA_COMMENT_REGEX, (m) => '\n'.repeat((m.match(/\n/g) || []).length));
 
     if (resolvedCount > 0) {
       core.info(`  Template resolution: ${resolvedCount} variable(s) injected, ${variables.size - resolvedCount} left as placeholders`);
@@ -751,6 +756,30 @@ export function checkRemovedReferences(
     out.push({ file: req.file, for: req.for, severity: req.severity, reason: 'removed-reference' });
   }
   return out;
+}
+
+/**
+ * Evaluate the require_reference convention for one prompt, mirroring the standard
+ * pipeline's per-mode structure (single source of truth for index.ts + tests):
+ *   - review mode → diff only: a REGRESSION (removed reference). Parallels the
+ *     standard diff analysis ("Base analysis ONLY on what changed").
+ *   - improve mode → full assessment (`refineReferenceViolations`, advisory) PLUS the
+ *     diff regression (`checkRemovedReferences`), since the standard pipeline runs both
+ *     scoring and Pass-2 diff in improve mode. Deduped by required-doc path: a removal
+ *     is the more specific framing, so it wins over the absolute finding for that doc.
+ */
+export function evaluateReferenceConvention(
+  before: string | null,
+  after: string,
+  filePath: string,
+  config: AssemblyConfig,
+  mode: 'review' | 'improve',
+): ReferenceViolation[] {
+  const removed = checkRemovedReferences(before, after, filePath, config);
+  if (mode === 'review') return removed;
+  const absolute = refineReferenceViolations(after, filePath, checkRequiredReferences(after, filePath, config));
+  const removedDocs = new Set(removed.map(v => v.file));
+  return [...removed, ...absolute.filter(v => !removedDocs.has(v.file))];
 }
 
 /**

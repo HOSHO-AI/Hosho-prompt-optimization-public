@@ -173,6 +173,7 @@ exports.hasSecuritySurface = hasSecuritySurface;
 exports.checkRequiredReferences = checkRequiredReferences;
 exports.refineReferenceViolations = refineReferenceViolations;
 exports.checkRemovedReferences = checkRemovedReferences;
+exports.evaluateReferenceConvention = evaluateReferenceConvention;
 exports.buildSegmentManifest = buildSegmentManifest;
 const child_process_1 = __nccwpck_require__(5317);
 const fs_1 = __nccwpck_require__(9896);
@@ -306,8 +307,13 @@ function resolveTemplateVariables(content, filePath, commitSha, changedFiles) {
             resolvedCount++;
             core.info(`  Resolved template {{ ${varName} }} from ${matchedPath}`);
         }
-        // Strip Jinja2 comments from the resolved content
-        resolved = resolved.replace(JINJA_COMMENT_REGEX, '');
+        // Strip Jinja2 comments from the resolved content, but PRESERVE line count:
+        // replace each comment with the same number of newlines it spanned. Deleting
+        // them would shift every subsequent line, and the provenance manifest's main
+        // segment is 1:1 — so the engine would mis-cite line numbers for any prompt
+        // that has both {# #} comments and {{ }} placeholders (M1; see
+        // prompt-assembly/SPEC.md §6). Blanking instead of deleting keeps lines aligned.
+        resolved = resolved.replace(JINJA_COMMENT_REGEX, (m) => '\n'.repeat((m.match(/\n/g) || []).length));
         if (resolvedCount > 0) {
             core.info(`  Template resolution: ${resolvedCount} variable(s) injected, ${variables.size - resolvedCount} left as placeholders`);
         }
@@ -848,6 +854,24 @@ function checkRemovedReferences(before, after, filePath, config) {
     return out;
 }
 /**
+ * Evaluate the require_reference convention for one prompt, mirroring the standard
+ * pipeline's per-mode structure (single source of truth for index.ts + tests):
+ *   - review mode → diff only: a REGRESSION (removed reference). Parallels the
+ *     standard diff analysis ("Base analysis ONLY on what changed").
+ *   - improve mode → full assessment (`refineReferenceViolations`, advisory) PLUS the
+ *     diff regression (`checkRemovedReferences`), since the standard pipeline runs both
+ *     scoring and Pass-2 diff in improve mode. Deduped by required-doc path: a removal
+ *     is the more specific framing, so it wins over the absolute finding for that doc.
+ */
+function evaluateReferenceConvention(before, after, filePath, config, mode) {
+    const removed = checkRemovedReferences(before, after, filePath, config);
+    if (mode === 'review')
+        return removed;
+    const absolute = refineReferenceViolations(after, filePath, checkRequiredReferences(after, filePath, config));
+    const removedDocs = new Set(removed.map(v => v.file));
+    return [...removed, ...absolute.filter(v => !removedDocs.has(v.file))];
+}
+/**
  * Derive the provenance manifest (WS-3) from an assembled blob by locating the
  * bundled section headers we appended (`## Skill:` / `## Companion file:` /
  * `## Reference:`, each preceded by the `---` separator). Each segment's
@@ -1239,13 +1263,10 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         if (assembledBefore !== null) {
             assembledBefore = (0, file_fetcher_1.resolveSharedReferences)(assembledBefore, baseSha, assemblyConfig).assembled;
         }
-        // Convention check (WS-2) — run on the AUTHORED content (pre-injection). hosho-review
-        // is diff-focused, so review mode only flags a REGRESSION (the PR removed a reference
-        // that existed before). Improve mode does the full-assessment "security-surface agent
-        // is missing the rules entirely" check (advisory). No LLM.
-        const violations = outputMode === 'review'
-            ? (0, file_fetcher_1.checkRemovedReferences)(before, after, change.filename, assemblyConfig)
-            : (0, file_fetcher_1.refineReferenceViolations)(after, change.filename, (0, file_fetcher_1.checkRequiredReferences)(after, change.filename, assemblyConfig));
+        // Convention check (WS-2) — run on the AUTHORED content (pre-injection). No LLM.
+        // Mirrors the standard pipeline's per-mode structure (review = diff-only regression;
+        // improve = full-assessment gap + diff regression, deduped). See file-fetcher.ts.
+        const violations = (0, file_fetcher_1.evaluateReferenceConvention)(before, after, change.filename, assemblyConfig, outputMode);
         if (violations.length > 0) {
             referenceViolationsByFile.set(change.filename, violations);
             core.info(`  Convention check (${outputMode}): ${violations.length} reference finding(s) in ${change.filename}`);

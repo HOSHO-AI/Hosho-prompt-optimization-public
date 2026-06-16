@@ -6,8 +6,8 @@ import { createTwoFilesPatch } from 'diff';
 import { identifyChangedPromptFiles } from './file-identifier';
 import {
   fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, bundleSiblingsForPrompt,
-  resolveSharedReferences, checkRequiredReferences, parseAssemblyConfig, buildSegmentManifest,
-  AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, refineReferenceViolations, checkRemovedReferences,
+  resolveSharedReferences, parseAssemblyConfig, buildSegmentManifest,
+  AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, evaluateReferenceConvention,
 } from './file-fetcher';
 import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
@@ -290,13 +290,10 @@ async function runPRMode(
       assembledBefore = resolveSharedReferences(assembledBefore, baseSha, assemblyConfig).assembled;
     }
 
-    // Convention check (WS-2) — run on the AUTHORED content (pre-injection). hosho-review
-    // is diff-focused, so review mode only flags a REGRESSION (the PR removed a reference
-    // that existed before). Improve mode does the full-assessment "security-surface agent
-    // is missing the rules entirely" check (advisory). No LLM.
-    const violations = outputMode === 'review'
-      ? checkRemovedReferences(before, after, change.filename, assemblyConfig)
-      : refineReferenceViolations(after, change.filename, checkRequiredReferences(after, change.filename, assemblyConfig));
+    // Convention check (WS-2) — run on the AUTHORED content (pre-injection). No LLM.
+    // Mirrors the standard pipeline's per-mode structure (review = diff-only regression;
+    // improve = full-assessment gap + diff regression, deduped). See file-fetcher.ts.
+    const violations = evaluateReferenceConvention(before, after, change.filename, assemblyConfig, outputMode);
     if (violations.length > 0) {
       referenceViolationsByFile.set(change.filename, violations);
       core.info(`  Convention check (${outputMode}): ${violations.length} reference finding(s) in ${change.filename}`);
