@@ -7,7 +7,7 @@ import { identifyChangedPromptFiles } from './file-identifier';
 import {
   fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, bundleSiblingsForPrompt,
   resolveSharedReferences, checkRequiredReferences, parseAssemblyConfig, buildSegmentManifest,
-  AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, SharedReferenceRequirement,
+  AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, refineReferenceViolations,
 } from './file-fetcher';
 import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
@@ -240,7 +240,7 @@ async function runPRMode(
   // for the PR-comment footer so reviewers can see what context was attached.
   const bundledByFile = new Map<string, { skills: string[]; siblings: string[] }>();
   // Deterministic convention-check violations (WS-2), keyed by file path.
-  const referenceViolationsByFile = new Map<string, SharedReferenceRequirement[]>();
+  const referenceViolationsByFile = new Map<string, ReferenceViolation[]>();
 
   const siblingPatterns = ['*prompt*.md', '*addendum*.md'];
 
@@ -291,11 +291,14 @@ async function runPRMode(
     }
 
     // Deterministic convention check (WS-2) — run on the AUTHORED content (pre-injection)
-    // so we verify the author wrote the reference, not that we injected it.
-    const violations = checkRequiredReferences(after, change.filename, assemblyConfig);
+    // so we verify the author wrote the reference, not that we injected it. The raw
+    // glob/reference primitive is then refined to advisory-only and scoped to prompts
+    // that structurally look like agents acting in the governed surface (no LLM).
+    const rawViolations = checkRequiredReferences(after, change.filename, assemblyConfig);
+    const violations = refineReferenceViolations(after, change.filename, rawViolations);
     if (violations.length > 0) {
       referenceViolationsByFile.set(change.filename, violations);
-      core.info(`  Convention check: ${violations.length} missing required reference(s) in ${change.filename}`);
+      core.info(`  Convention check: ${violations.length} advisory reference suggestion(s) in ${change.filename}`);
     }
 
     if (fileBundled.skills.length > 0 || fileBundled.siblings.length > 0) {
@@ -358,11 +361,11 @@ async function runPRMode(
     const violations = referenceViolationsByFile.get(result.file);
     if (!violations || violations.length === 0) continue;
     const items: ChangeItem[] = violations.map(v => ({
-      change: `Missing required reference to \`${v.file}\``,
-      impact: `Team convention requires prompts matching \`${v.for}\` to reference \`${v.file}\`, but this prompt does not.`,
+      change: `Consider referencing \`${v.file}\``,
+      impact: `A configured convention expects prompts matching \`${v.for}\` to reference \`${v.file}\`. This prompt ${v.reason}, so those shared rules likely apply — but it doesn't cite them. Advisory: the underlying security is typically enforced in code, not per-prompt.`,
       effect: 'negative' as const,
       severity: v.severity,
-      category: 'Team convention',
+      category: 'Security doc reference',
     }));
     result.changeSummary = [...(result.changeSummary ?? []), ...items];
   }

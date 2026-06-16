@@ -404,6 +404,17 @@ export interface SharedReferenceRequirement {
   severity: 'critical' | 'suggestion';
 }
 
+/**
+ * A convention-check result we decided to surface for a single (rule, prompt)
+ * pair. Always advisory (`severity: 'suggestion'`) — see `checkRequiredReferences`.
+ */
+export interface ReferenceViolation {
+  file: string;                                 // the required file, from the rule
+  for: string;                                  // the rule's glob (for the message)
+  severity: 'critical' | 'suggestion';          // effective severity (advisory for this check)
+  reason: string;                               // the structural signal that made this in-scope
+}
+
 export interface AssemblyConfig {
   injectWhenReferenced: string[];               // repo-relative files to bundle when a prompt references them
   requireReference: SharedReferenceRequirement[];
@@ -559,10 +570,96 @@ export function resolveSharedReferences(
   }
 }
 
+// ---- Security-surface classifier (WS-2) ------------------------------------
+// A `require_reference` rule (e.g. "every agent prompt must cite agent-security.md")
+// is a maintainability convention, not a runtime contract — security is typically
+// enforced in code, and such a doc usually applies only to agents that *act* in a
+// sandbox (run tools, write files, handle credentials). We therefore only surface a
+// *missing* reference when the prompt structurally looks like such an agent, and
+// always as an advisory suggestion — never a blocking finding. Deterministic, no LLM.
+
+/** Leading YAML frontmatter block (between the first pair of `---`), or ''. */
+function stripBom(content: string): string {
+  return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+}
+
+function extractFrontmatter(content: string): string {
+  const m = stripBom(content).match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  return m ? m[1] : '';
+}
+
+/** True when the prompt is Jinja markup with almost no prose — an input template, not an agent body. */
+function isJinjaOnlyTemplate(content: string): boolean {
+  const body = stripBom(content).replace(/^---\r?\n[\s\S]*?\r?\n---/, '').trim();
+  if (!body || !/\{[#%{]/.test(body)) return false;
+  const prose = body
+    .replace(/\{#[\s\S]*?#\}/g, '')
+    .replace(/\{%[\s\S]*?%\}/g, '')
+    .replace(/\{\{[\s\S]*?\}\}/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return prose.length < 200;
+}
+
 /**
- * Deterministic convention check (WS-2): for each `require_reference` rule whose
- * `for` glob matches `filePath`, verify the (original, pre-injection) prompt
- * references the file. Returns the rules that were violated. No LLM.
+ * Prompts that are never "an agent that acts", so a shared security/policy doc
+ * reference is never expected: per-task input templates and non-agent prompts
+ * (eval judges, spec extractors, authoring/skill-asset docs).
+ */
+export function isStructurallyExempt(filePath: string, content: string): boolean {
+  const base = (filePath.split('/').pop() || filePath).toLowerCase();
+  if (/user[-_.]?prompt/.test(base)) return true;                    // task-input template
+  if (/(^|[-_])user\.(md|txt)$/.test(base)) return true;
+  if (/\/(evals?|references?|skills)\//i.test(filePath)) return true; // non-agent prompts
+  if (/(judge|authoring)/.test(base)) return true;
+  if (/(^|[-_.])spec([-_.]|$)/.test(base)) return true;
+  if (isJinjaOnlyTemplate(content)) return true;
+  return false;
+}
+
+// Strong signal: the agent declares a skills/tools sandbox in frontmatter.
+const FRONTMATTER_SKILL_KEYS = /^\s*(allowed_skills|tools|skills|mcp_servers|mcp)\s*:/im;
+// Strong signal: the prompt invokes CLI/tool commands the agent runs.
+const COMMAND_SIGNAL = /`\s*(kite-[\w-]+|set-task-result|trigger_[\w-]+|[\w-]+-agent)\b|\bthe\s+`[\w-]+`\s+tool\b|\b(?:run|call|invoke)\s+`[^`]+`/i;
+// Weak signal: sandbox / file-mutation action language.
+const SANDBOX_SIGNAL = /\b(sandbox|working directory|reviewable draft|set-task-result|kite-websites|kite-tasks)\b|\bclone\s+</i;
+const FILE_MUTATION_SIGNAL = /\/tmp\b|\b(?:write|edit|create|modify|patch)\b[^.\n]{0,40}\bfile\b/i;
+// Weak signal: credential / infrastructure surface.
+const INFRA_SIGNAL = /\b(api[\s_-]?key|secret|access[\s_-]?token|environment variable|env\s+var|reverse proxy|credential)\b/i;
+// Pure-generator framing — explicit structured output, no execution.
+const GENERATOR_SIGNAL = /\breturn (?:exactly )?(?:the )?(?:json|structured|only)\b|\boutput (?:an? )?(?:empty string|list|json)\b|\(maximum \d+ characters?\)|\bno preamble\b|\bconsumed programmatically\b/i;
+
+export interface SecuritySurfaceResult {
+  surface: boolean;
+  reason: string;
+}
+
+/**
+ * Deterministic classifier: does this prompt look like an agent that operates in
+ * the surface a security doc governs (runs tools, writes files in a sandbox,
+ * handles credentials)? Strong signals always win; weak signals are ignored when
+ * the prompt is framed as a pure generator. Conservative: unknown → not surface.
+ */
+export function hasSecuritySurface(content: string): SecuritySurfaceResult {
+  const fm = extractFrontmatter(content);
+  if (FRONTMATTER_SKILL_KEYS.test(fm)) return { surface: true, reason: 'declares a skills/tools sandbox in its frontmatter' };
+  if (COMMAND_SIGNAL.test(content)) return { surface: true, reason: 'invokes sandbox tools or commands' };
+  const isGenerator = GENERATOR_SIGNAL.test(content);
+  if (!isGenerator) {
+    if (SANDBOX_SIGNAL.test(content) || FILE_MUTATION_SIGNAL.test(content)) return { surface: true, reason: 'reads or writes files in a sandbox' };
+    if (INFRA_SIGNAL.test(content)) return { surface: true, reason: 'handles credentials or infrastructure' };
+  }
+  return { surface: false, reason: '' };
+}
+
+/**
+ * Deterministic convention check (WS-2) — SPEC primitive (TS↔Python parity, asserted
+ * by tests/golden-vectors.test.ts against prompt-assembly/golden_vectors.json). For
+ * each `require_reference` rule whose `for` glob matches `filePath`, verify the
+ * (original, pre-injection) prompt references the file; return the violated rules.
+ * No LLM. DO NOT change behavior without also updating the spec + golden vectors +
+ * the Python port. The decision of whether/how to SURFACE these is a separate,
+ * action-level concern — see `refineReferenceViolations`.
  */
 export function checkRequiredReferences(
   content: string,
@@ -576,6 +673,27 @@ export function checkRequiredReferences(
     if (!promptReferencesPath(content, req.file)) violations.push(req);
   }
   return violations;
+}
+
+/**
+ * Action-level refinement of raw `checkRequiredReferences` output (NOT a spec
+ * primitive — no golden vector). A `require_reference` rule is a maintainability
+ * convention, not a runtime contract (security is typically enforced in code), so we
+ * avoid blocking PRs on a deterministic doc-reference heuristic. We:
+ *   - suppress task-input templates and non-agent prompts (`isStructurallyExempt`),
+ *   - suppress prompts that show no security surface (`hasSecuritySurface`), and
+ *   - emit the remainder as ADVISORY suggestions only — never a blocking finding.
+ */
+export function refineReferenceViolations(
+  content: string,
+  filePath: string,
+  rawViolations: SharedReferenceRequirement[],
+): ReferenceViolation[] {
+  if (rawViolations.length === 0) return [];
+  if (isStructurallyExempt(filePath, content)) return [];          // task-input / non-agent → suppress
+  const { surface, reason } = hasSecuritySurface(content);
+  if (!surface) return [];                                          // no security surface → suppress
+  return rawViolations.map(v => ({ file: v.file, for: v.for, severity: 'suggestion' as const, reason }));
 }
 
 /**
