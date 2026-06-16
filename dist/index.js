@@ -168,9 +168,11 @@ exports.parseAssemblyConfig = parseAssemblyConfig;
 exports.promptReferencesPath = promptReferencesPath;
 exports.resolveSharedReferences = resolveSharedReferences;
 exports.isStructurallyExempt = isStructurallyExempt;
+exports.hasInlineSecurityRules = hasInlineSecurityRules;
 exports.hasSecuritySurface = hasSecuritySurface;
 exports.checkRequiredReferences = checkRequiredReferences;
 exports.refineReferenceViolations = refineReferenceViolations;
+exports.checkRemovedReferences = checkRemovedReferences;
 exports.buildSegmentManifest = buildSegmentManifest;
 const child_process_1 = __nccwpck_require__(5317);
 const fs_1 = __nccwpck_require__(9896);
@@ -728,6 +730,32 @@ const FILE_MUTATION_SIGNAL = /\/tmp\b|\b(?:write|edit|create|modify|patch)\b[^.\
 const INFRA_SIGNAL = /\b(api[\s_-]?key|secret|access[\s_-]?token|environment variable|env\s+var|reverse proxy|credential)\b/i;
 // Pure-generator framing — explicit structured output, no execution.
 const GENERATOR_SIGNAL = /\breturn (?:exactly )?(?:the )?(?:json|structured|only)\b|\boutput (?:an? )?(?:empty string|list|json)\b|\(maximum \d+ characters?\)|\bno preamble\b|\bconsumed programmatically\b/i;
+// Signals that a prompt already STATES the shared security rules inline (so it is
+// "covered" even without a literal link to the doc — appsmith has no macro/central
+// injection; security is inline + code guardrails). Derived from agent-security.md's
+// own constraint vocabulary. Require >= 2 distinct hits so an incidental word (e.g.
+// "token budget") doesn't count as a security policy.
+const INLINE_SECURITY_SIGNALS = [
+    /\bapi prox/i,
+    /\breverse prox/i,
+    /\brelay (?:server|endpoint|service)/i,
+    /credential[- ]?forward/i,
+    /\bKEY\/SECRET\/TOKEN\b/,
+    /\benvironment variables?\b/i,
+    /\bHTTP servers?\b/i,
+    /\b(?:AI[- ]?provider|provider) SDK/i,
+    /\b(?:CTF|pentest(?:ing)?|red[- ]?team)\b/i,
+    /\bsocial engineering\b/i,
+];
+/** True when the prompt restates the shared security rules inline (>= 2 distinct signals). */
+function hasInlineSecurityRules(content) {
+    let hits = 0;
+    for (const re of INLINE_SECURITY_SIGNALS) {
+        if (re.test(content) && ++hits >= 2)
+            return true;
+    }
+    return false;
+}
 /**
  * Deterministic classifier: does this prompt look like an agent that operates in
  * the surface a security doc governs (runs tools, writes files in a sandbox,
@@ -771,23 +799,53 @@ function checkRequiredReferences(content, filePath, config) {
     return violations;
 }
 /**
- * Action-level refinement of raw `checkRequiredReferences` output (NOT a spec
+ * IMPROVE-MODE refinement of raw `checkRequiredReferences` output (NOT a spec
  * primitive — no golden vector). A `require_reference` rule is a maintainability
- * convention, not a runtime contract (security is typically enforced in code), so we
- * avoid blocking PRs on a deterministic doc-reference heuristic. We:
+ * convention, not a runtime contract (security is enforced in code + inline rules),
+ * so for a full assessment we only flag a GENUINE GAP — a security-surface agent that
+ * has neither a link to the doc (already excluded by `checkRequiredReferences`) nor
+ * the rules stated inline. We:
  *   - suppress task-input templates and non-agent prompts (`isStructurallyExempt`),
+ *   - suppress prompts that already state the rules inline (`hasInlineSecurityRules`),
  *   - suppress prompts that show no security surface (`hasSecuritySurface`), and
  *   - emit the remainder as ADVISORY suggestions only — never a blocking finding.
+ * Used in improve mode; review (diff) mode uses `checkRemovedReferences` instead.
  */
 function refineReferenceViolations(content, filePath, rawViolations) {
     if (rawViolations.length === 0)
         return [];
     if (isStructurallyExempt(filePath, content))
         return []; // task-input / non-agent → suppress
+    if (hasInlineSecurityRules(content))
+        return []; // rules present inline → already covered
     const { surface, reason } = hasSecuritySurface(content);
     if (!surface)
         return []; // no security surface → suppress
     return rawViolations.map(v => ({ file: v.file, for: v.for, severity: 'suggestion', reason }));
+}
+/**
+ * REVIEW-MODE (diff) convention check (NOT a spec primitive). hosho-review is
+ * diff-focused, so a missing reference is only a "problem" when THIS PR removed one
+ * that existed before — not a pre-existing absence (that's an improve-mode question).
+ * Returns the rules whose reference was present in `before` and is now gone in
+ * `after`, carrying the configured severity (a real removal is high-confidence).
+ */
+function checkRemovedReferences(before, after, filePath, config) {
+    if (!before)
+        return []; // new file → no regression
+    const out = [];
+    for (const req of config?.requireReference || []) {
+        if (!req.file)
+            continue;
+        if (!(0, minimatch_1.minimatch)(filePath, req.for, { dot: true }))
+            continue;
+        if (!promptReferencesPath(before, req.file))
+            continue; // wasn't referenced before → not a removal
+        if (promptReferencesPath(after, req.file))
+            continue; // still referenced → fine
+        out.push({ file: req.file, for: req.for, severity: req.severity, reason: 'removed-reference' });
+    }
+    return out;
 }
 /**
  * Derive the provenance manifest (WS-3) from an assembled blob by locating the
@@ -1181,15 +1239,16 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         if (assembledBefore !== null) {
             assembledBefore = (0, file_fetcher_1.resolveSharedReferences)(assembledBefore, baseSha, assemblyConfig).assembled;
         }
-        // Deterministic convention check (WS-2) — run on the AUTHORED content (pre-injection)
-        // so we verify the author wrote the reference, not that we injected it. The raw
-        // glob/reference primitive is then refined to advisory-only and scoped to prompts
-        // that structurally look like agents acting in the governed surface (no LLM).
-        const rawViolations = (0, file_fetcher_1.checkRequiredReferences)(after, change.filename, assemblyConfig);
-        const violations = (0, file_fetcher_1.refineReferenceViolations)(after, change.filename, rawViolations);
+        // Convention check (WS-2) — run on the AUTHORED content (pre-injection). hosho-review
+        // is diff-focused, so review mode only flags a REGRESSION (the PR removed a reference
+        // that existed before). Improve mode does the full-assessment "security-surface agent
+        // is missing the rules entirely" check (advisory). No LLM.
+        const violations = outputMode === 'review'
+            ? (0, file_fetcher_1.checkRemovedReferences)(before, after, change.filename, assemblyConfig)
+            : (0, file_fetcher_1.refineReferenceViolations)(after, change.filename, (0, file_fetcher_1.checkRequiredReferences)(after, change.filename, assemblyConfig));
         if (violations.length > 0) {
             referenceViolationsByFile.set(change.filename, violations);
-            core.info(`  Convention check: ${violations.length} advisory reference suggestion(s) in ${change.filename}`);
+            core.info(`  Convention check (${outputMode}): ${violations.length} reference finding(s) in ${change.filename}`);
         }
         if (fileBundled.skills.length > 0 || fileBundled.siblings.length > 0) {
             bundledByFile.set(change.filename, fileBundled);
@@ -1246,13 +1305,21 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         const violations = referenceViolationsByFile.get(result.file);
         if (!violations || violations.length === 0)
             continue;
-        const items = violations.map(v => ({
-            change: `Consider referencing \`${v.file}\``,
-            impact: `A configured convention expects prompts matching \`${v.for}\` to reference \`${v.file}\`. This prompt ${v.reason}, so those shared rules likely apply — but it doesn't cite them. Advisory: the underlying security is typically enforced in code, not per-prompt.`,
-            effect: 'negative',
-            severity: v.severity,
-            category: 'Security doc reference',
-        }));
+        const items = violations.map(v => v.reason === 'removed-reference'
+            ? {
+                change: `This PR removes the reference to \`${v.file}\``,
+                impact: `The previous version of this prompt referenced \`${v.file}\` (a configured convention for \`${v.for}\`); this change drops it.`,
+                effect: 'negative',
+                severity: v.severity,
+                category: 'Security doc reference',
+            }
+            : {
+                change: `Consider referencing \`${v.file}\``,
+                impact: `This prompt ${v.reason} and operates in the surface \`${v.file}\` governs, but neither links to nor states those shared rules. Advisory: security is also enforced in code, so this is a maintainability suggestion.`,
+                effect: 'negative',
+                severity: v.severity,
+                category: 'Security doc reference',
+            });
         result.changeSummary = [...(result.changeSummary ?? []), ...items];
     }
     if (allResults.length === 0) {

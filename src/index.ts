@@ -7,7 +7,7 @@ import { identifyChangedPromptFiles } from './file-identifier';
 import {
   fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, bundleSiblingsForPrompt,
   resolveSharedReferences, checkRequiredReferences, parseAssemblyConfig, buildSegmentManifest,
-  AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, refineReferenceViolations,
+  AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, refineReferenceViolations, checkRemovedReferences,
 } from './file-fetcher';
 import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
@@ -290,15 +290,16 @@ async function runPRMode(
       assembledBefore = resolveSharedReferences(assembledBefore, baseSha, assemblyConfig).assembled;
     }
 
-    // Deterministic convention check (WS-2) — run on the AUTHORED content (pre-injection)
-    // so we verify the author wrote the reference, not that we injected it. The raw
-    // glob/reference primitive is then refined to advisory-only and scoped to prompts
-    // that structurally look like agents acting in the governed surface (no LLM).
-    const rawViolations = checkRequiredReferences(after, change.filename, assemblyConfig);
-    const violations = refineReferenceViolations(after, change.filename, rawViolations);
+    // Convention check (WS-2) — run on the AUTHORED content (pre-injection). hosho-review
+    // is diff-focused, so review mode only flags a REGRESSION (the PR removed a reference
+    // that existed before). Improve mode does the full-assessment "security-surface agent
+    // is missing the rules entirely" check (advisory). No LLM.
+    const violations = outputMode === 'review'
+      ? checkRemovedReferences(before, after, change.filename, assemblyConfig)
+      : refineReferenceViolations(after, change.filename, checkRequiredReferences(after, change.filename, assemblyConfig));
     if (violations.length > 0) {
       referenceViolationsByFile.set(change.filename, violations);
-      core.info(`  Convention check: ${violations.length} advisory reference suggestion(s) in ${change.filename}`);
+      core.info(`  Convention check (${outputMode}): ${violations.length} reference finding(s) in ${change.filename}`);
     }
 
     if (fileBundled.skills.length > 0 || fileBundled.siblings.length > 0) {
@@ -360,13 +361,21 @@ async function runPRMode(
   for (const result of allResults) {
     const violations = referenceViolationsByFile.get(result.file);
     if (!violations || violations.length === 0) continue;
-    const items: ChangeItem[] = violations.map(v => ({
-      change: `Consider referencing \`${v.file}\``,
-      impact: `A configured convention expects prompts matching \`${v.for}\` to reference \`${v.file}\`. This prompt ${v.reason}, so those shared rules likely apply — but it doesn't cite them. Advisory: the underlying security is typically enforced in code, not per-prompt.`,
-      effect: 'negative' as const,
-      severity: v.severity,
-      category: 'Security doc reference',
-    }));
+    const items: ChangeItem[] = violations.map(v => v.reason === 'removed-reference'
+      ? {
+          change: `This PR removes the reference to \`${v.file}\``,
+          impact: `The previous version of this prompt referenced \`${v.file}\` (a configured convention for \`${v.for}\`); this change drops it.`,
+          effect: 'negative' as const,
+          severity: v.severity,
+          category: 'Security doc reference',
+        }
+      : {
+          change: `Consider referencing \`${v.file}\``,
+          impact: `This prompt ${v.reason} and operates in the surface \`${v.file}\` governs, but neither links to nor states those shared rules. Advisory: security is also enforced in code, so this is a maintainability suggestion.`,
+          effect: 'negative' as const,
+          severity: v.severity,
+          category: 'Security doc reference',
+        });
     result.changeSummary = [...(result.changeSummary ?? []), ...items];
   }
 

@@ -3,7 +3,9 @@ import {
   parseAssemblyConfig,
   checkRequiredReferences,
   refineReferenceViolations,
+  checkRemovedReferences,
   hasSecuritySurface,
+  hasInlineSecurityRules,
   isStructurallyExempt,
 } from '../src/file-fetcher';
 
@@ -18,9 +20,14 @@ require_reference:
     severity: critical
 `);
 
-// End-to-end as the action runs it: raw spec primitive → action-level refinement.
-function review(content: string, filePath: string) {
+// IMPROVE mode: absolute spec primitive → content-aware refinement (advisory only).
+function improve(content: string, filePath: string) {
   return refineReferenceViolations(content, filePath, checkRequiredReferences(content, filePath, CFG));
+}
+
+// REVIEW mode: diff regression — only a removed reference is flagged (config severity).
+function reviewDiff(before: string | null, after: string, filePath: string) {
+  return checkRemovedReferences(before, after, filePath, CFG);
 }
 
 // ---- Corpus snippets (grounded in real appsmith-v2 prompts) -----------------
@@ -116,21 +123,21 @@ describe('isStructurallyExempt', () => {
   });
 });
 
-describe('review() — end-to-end outcome for PR #12522 (config unchanged)', () => {
+describe('improve() — full-assessment outcome for PR #12522 files (config unchanged)', () => {
   it('compliant prompts (already cite the doc) → no finding', () => {
-    expect(review(ORCHESTRATOR, 'backend/app/llm/orchestrator_agent/system-prompt.md')).toHaveLength(0);
+    expect(improve(ORCHESTRATOR, 'backend/app/llm/orchestrator_agent/system-prompt.md')).toHaveLength(0);
   });
 
   it('user-prompts → suppressed', () => {
-    expect(review(USER_PROMPT_TEMPLATE, 'backend/app/llm/cmo_agent/user-prompt.md')).toHaveLength(0);
-    expect(review(USER_PROMPT_TEMPLATE, 'backend/app/llm/coding/team_task/user-prompt.md')).toHaveLength(0);
+    expect(improve(USER_PROMPT_TEMPLATE, 'backend/app/llm/cmo_agent/user-prompt.md')).toHaveLength(0);
+    expect(improve(USER_PROMPT_TEMPLATE, 'backend/app/llm/coding/team_task/user-prompt.md')).toHaveLength(0);
   });
 
   it('pure generators → never flagged', () => {
-    expect(review(DRAFT_NAME, 'backend/app/llm/content/draft_name/system-prompt.md')).toHaveLength(0);
-    expect(review(KEYWORD_GEN, 'backend/app/llm/keyword_opportunity_generator/system-prompt.md')).toHaveLength(0);
-    expect(review(LOGO_DESCRIBER, 'backend/app/llm/design/logo_describer/logo-describe-prompt.md')).toHaveLength(0);
-    expect(review(WEBSITE_NAME, 'backend/app/llm/content/website_name/system-prompt.md')).toHaveLength(0);
+    expect(improve(DRAFT_NAME, 'backend/app/llm/content/draft_name/system-prompt.md')).toHaveLength(0);
+    expect(improve(KEYWORD_GEN, 'backend/app/llm/keyword_opportunity_generator/system-prompt.md')).toHaveLength(0);
+    expect(improve(LOGO_DESCRIBER, 'backend/app/llm/design/logo_describer/logo-describe-prompt.md')).toHaveLength(0);
+    expect(improve(WEBSITE_NAME, 'backend/app/llm/content/website_name/system-prompt.md')).toHaveLength(0);
   });
 
   it('sandbox/task agents → exactly one ADVISORY suggestion (never critical)', () => {
@@ -140,7 +147,7 @@ describe('review() — end-to-end outcome for PR #12522 (config unchanged)', () 
       [CMO_AGENT, 'backend/app/llm/cmo_agent/system-prompt.md'],
     ];
     for (const [content, file] of cases) {
-      const out = review(content, file);
+      const out = improve(content, file);
       expect(out).toHaveLength(1);
       expect(out[0].severity).toBe('suggestion');
       expect(out[0].file).toBe('backend/docs/rules/agent-security.md');
@@ -148,14 +155,67 @@ describe('review() — end-to-end outcome for PR #12522 (config unchanged)', () 
     }
   });
 
-  it('never emits a critical (blocking) finding for this check', () => {
+  it('a security-surface agent that STATES the rules inline (no link) → suppressed (covered)', () => {
+    const inlined = `---
+allowed_skills: null
+---
+Role: Kite coding agent. Do not create API proxy or relay endpoints, do not read or forward
+environment variables containing KEY/SECRET/TOKEN, do not create HTTP servers on custom ports,
+and do not install AI provider SDKs for proxying.`;
+    expect(hasInlineSecurityRules(inlined)).toBe(true);
+    expect(improve(inlined, 'backend/app/llm/coding_agent/system-prompt.md')).toHaveLength(0);
+  });
+
+  it('improve mode never emits a critical (blocking) finding', () => {
     const all = [CODING_AGENT, SEO_AGENT, CMO_AGENT, TEAM_TASK_SYSTEM].flatMap((c, i) =>
-      review(c, `backend/app/llm/agent${i}/system-prompt.md`),
+      improve(c, `backend/app/llm/agent${i}/system-prompt.md`),
     );
     expect(all.every(v => v.severity === 'suggestion')).toBe(true);
   });
 
   it('files outside the for-glob are untouched', () => {
-    expect(review(CODING_AGENT, 'frontend/src/App.tsx')).toHaveLength(0);
+    expect(improve(CODING_AGENT, 'frontend/src/App.tsx')).toHaveLength(0);
+  });
+});
+
+describe('reviewDiff() — review mode flags ONLY a removed reference', () => {
+  const file = 'backend/app/llm/coding/system-prompt.md';
+  const WITH_REF = 'See `docs/rules/agent-security.md` for the full policy.\nRole: coding agent.';
+  const WITHOUT_REF = 'Role: coding agent.';
+
+  it('PR removes an existing reference → one finding at the config severity (critical)', () => {
+    const out = reviewDiff(WITH_REF, WITHOUT_REF, file);
+    expect(out).toHaveLength(1);
+    expect(out[0].file).toBe('backend/docs/rules/agent-security.md');
+    expect(out[0].severity).toBe('critical');   // honors config severity for a real removal
+    expect(out[0].reason).toBe('removed-reference');
+  });
+
+  it('new file (no before) → never flagged, regardless of content', () => {
+    expect(reviewDiff(null, WITHOUT_REF, file)).toHaveLength(0);
+  });
+
+  it('pre-existing absence (before also lacked it) → not flagged (not a regression)', () => {
+    expect(reviewDiff(WITHOUT_REF, WITHOUT_REF, file)).toHaveLength(0);
+  });
+
+  it('reference still present after → not flagged', () => {
+    expect(reviewDiff(WITH_REF, WITH_REF, file)).toHaveLength(0);
+  });
+
+  it('removal in a file outside the for-glob → not flagged', () => {
+    expect(reviewDiff(WITH_REF, WITHOUT_REF, 'frontend/src/App.tsx')).toHaveLength(0);
+  });
+
+  it('#12522 reality: no prompt removes the reference → zero review findings', () => {
+    // The PR adds frontmatter; none of these touch an agent-security reference.
+    for (const f of [
+      'backend/app/llm/cmo_agent/system-prompt.md',
+      'backend/app/llm/coding_agent/system-prompt.md',
+      'backend/app/llm/seo/system-prompt.md',
+    ]) {
+      // before === after (no security-reference change) → no removal
+      expect(reviewDiff('Role: agent.', 'Role: agent.\n---\ndescription: x\n---', f)).toHaveLength(0);
+    }
   });
 });
