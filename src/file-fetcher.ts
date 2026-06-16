@@ -219,10 +219,10 @@ export function bundleSkillsForPrompt(
   content: string,
   commitSha: string,
   skillsDirs: string[],
-): { assembled: string; bundled: string[] } {
+): { assembled: string; bundled: string[]; paths: Record<string, string> } {
   try {
     if (!skillsDirs || skillsDirs.length === 0) {
-      return { assembled: content, bundled: [] };
+      return { assembled: content, bundled: [], paths: {} };
     }
 
     // Collect candidate skill names from backticked tokens (deduped).
@@ -234,10 +234,14 @@ export function bundleSkillsForPrompt(
     }
 
     if (candidates.size === 0) {
-      return { assembled: content, bundled: [] };
+      return { assembled: content, bundled: [], paths: {} };
     }
 
-    const resolved: Array<{ name: string; body: string }> = [];
+    // (name, body, sourcePath) — sourcePath is the repo path the skill resolved
+    // from; threaded into the manifest so Segment.source is the real path, not
+    // the bare display name (G1 — must match the Python port for one-approach
+    // byte-parity).
+    const resolved: Array<{ name: string; body: string; path: string }> = [];
     let totalBytes = 0;
     const droppedForCap: string[] = [];
 
@@ -257,9 +261,10 @@ export function bundleSkillsForPrompt(
       }
 
       let body: string | null = null;
+      let resolvedPath: string | null = null;
       for (const candidate of candidatePaths) {
         body = gitShowFile(commitSha, candidate);
-        if (body !== null) break;
+        if (body !== null) { resolvedPath = candidate; break; }
       }
       if (body === null) continue;
 
@@ -269,11 +274,11 @@ export function bundleSkillsForPrompt(
         continue;
       }
       totalBytes += bodyBytes;
-      resolved.push({ name, body });
+      resolved.push({ name, body, path: resolvedPath ?? name });
     }
 
     if (resolved.length === 0) {
-      return { assembled: content, bundled: [] };
+      return { assembled: content, bundled: [], paths: {} };
     }
 
     let assembled = content;
@@ -286,10 +291,12 @@ export function bundleSkillsForPrompt(
     }
     core.info(`  Bundled ${resolved.length} skill(s): ${resolved.map(r => r.name).join(', ')}`);
 
-    return { assembled, bundled: resolved.map(r => r.name) };
+    const paths: Record<string, string> = {};
+    for (const { name, path } of resolved) paths[name] = path;
+    return { assembled, bundled: resolved.map(r => r.name), paths };
   } catch (error) {
     core.warning(`Skill bundling failed: ${error}. Continuing with raw content.`);
-    return { assembled: content, bundled: [] };
+    return { assembled: content, bundled: [], paths: {} };
   }
 }
 
@@ -306,16 +313,16 @@ export function bundleSiblingsForPrompt(
   filePath: string,
   commitSha: string,
   patterns: string[],
-): { assembled: string; bundled: string[] } {
+): { assembled: string; bundled: string[]; paths: Record<string, string> } {
   try {
     if (!patterns || patterns.length === 0) {
-      return { assembled: content, bundled: [] };
+      return { assembled: content, bundled: [], paths: {} };
     }
     const dir = path.dirname(filePath);
     const base = path.basename(filePath);
     const entries = gitListDir(commitSha, dir);
     if (!entries) {
-      return { assembled: content, bundled: [] };
+      return { assembled: content, bundled: [], paths: {} };
     }
 
     // A system-prompt is one agent's complete definition. A sibling system-prompt is a
@@ -335,10 +342,12 @@ export function bundleSiblingsForPrompt(
     });
 
     if (matching.length === 0) {
-      return { assembled: content, bundled: [] };
+      return { assembled: content, bundled: [], paths: {} };
     }
 
-    const resolved: Array<{ name: string; body: string }> = [];
+    // (name, body, sourcePath) — sourcePath is the dir-relative repo path so the
+    // manifest records the real path, not the bare filename (G1; matches Python).
+    const resolved: Array<{ name: string; body: string; path: string }> = [];
     let totalBytes = 0;
     const droppedForCap: string[] = [];
 
@@ -347,7 +356,8 @@ export function bundleSiblingsForPrompt(
         droppedForCap.push(name);
         continue;
       }
-      const body = gitShowFile(commitSha, `${dir}/${name}`);
+      const sourcePath = `${dir}/${name}`;
+      const body = gitShowFile(commitSha, sourcePath);
       if (body === null) continue;
       const bodyBytes = Buffer.byteLength(body, 'utf-8');
       if (totalBytes + bodyBytes > MAX_SIBLINGS_BYTES) {
@@ -355,11 +365,11 @@ export function bundleSiblingsForPrompt(
         continue;
       }
       totalBytes += bodyBytes;
-      resolved.push({ name, body });
+      resolved.push({ name, body, path: sourcePath });
     }
 
     if (resolved.length === 0) {
-      return { assembled: content, bundled: [] };
+      return { assembled: content, bundled: [], paths: {} };
     }
 
     let assembled = content;
@@ -372,10 +382,12 @@ export function bundleSiblingsForPrompt(
     }
     core.info(`  Bundled ${resolved.length} sibling(s): ${resolved.map(r => r.name).join(', ')}`);
 
-    return { assembled, bundled: resolved.map(r => r.name) };
+    const paths: Record<string, string> = {};
+    for (const { name, path: p } of resolved) paths[name] = p;
+    return { assembled, bundled: resolved.map(r => r.name), paths };
   } catch (error) {
     core.warning(`Sibling bundling failed for ${filePath}: ${error}. Continuing with raw content.`);
-    return { assembled: content, bundled: [] };
+    return { assembled: content, bundled: [], paths: {} };
   }
 }
 
@@ -574,7 +586,12 @@ export function checkRequiredReferences(
  * file owns everything before the first section. Sent to the engine so it can map
  * model-reported blob lines back to (sourceFile, sourceLine).
  */
-export function buildSegmentManifest(assembled: string, mainSource: string, knownSections?: Set<string>): Segment[] {
+export function buildSegmentManifest(
+  assembled: string,
+  mainSource: string,
+  knownSections?: Set<string>,
+  sourcePaths?: Record<string, string>,
+): Segment[] {
   const lines = assembled.split('\n');
   const segments: Segment[] = [{ source: mainSource, kind: 'main', blobStartLine: 1, sourceStartLine: 1 }];
   const headerRe = /^## (Skill|Companion file|Reference): (.+)$/;
@@ -589,8 +606,14 @@ export function buildSegmentManifest(assembled: string, mainSource: string, know
     // the separator heuristic above.
     if (knownSections && !knownSections.has(name)) continue;
     const kind: Segment['kind'] = m[1] === 'Skill' ? 'skill' : m[1] === 'Companion file' ? 'sibling' : 'reference';
+    // Record the resolved repo PATH in Segment.source (G1 — one-approach parity
+    // with the Python port). Skill/companion headers carry a bare display name;
+    // sourcePaths maps it to the real path. Reference headers are already paths,
+    // so they fall through to `name`. Falls back to the name when no map (keeps
+    // the standalone manifest test + any name-only caller working).
+    const source = sourcePaths?.[name] ?? name;
     // Header at 1-based line i+1; blank at i+2; body starts at i+3.
-    segments.push({ source: name, kind, blobStartLine: i + 3, sourceStartLine: 1 });
+    segments.push({ source, kind, blobStartLine: i + 3, sourceStartLine: 1 });
   }
   return segments;
 }

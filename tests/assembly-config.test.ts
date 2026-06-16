@@ -34,6 +34,24 @@ describe('buildSegmentManifest (provenance: which line is in which file)', () =>
     const segs = buildSegmentManifest(tricky, 'system-prompt.md', new Set(['real']));
     expect(segs.map(s => s.source)).toEqual(['system-prompt.md', 'real']);
   });
+
+  it('records the resolved repo PATH in Segment.source when sourcePaths is supplied (G1 parity)', () => {
+    // The skill header carries the bare display name `xx`; the bundler-supplied
+    // name→path map makes Segment.source the real repo path — matching the
+    // Python port so a downstream consumer can re-read source as a file path.
+    const segs = buildSegmentManifest(
+      BLOB,
+      'system-prompt.md',
+      new Set(['xx', 'docs/rules/yy.md']),
+      { xx: 'backend/app/llm/skills/xx/SKILL.md' },
+    );
+    expect(segs).toEqual([
+      { source: 'system-prompt.md', kind: 'main', blobStartLine: 1, sourceStartLine: 1 },
+      { source: 'backend/app/llm/skills/xx/SKILL.md', kind: 'skill', blobStartLine: 9, sourceStartLine: 1 },
+      // Reference header is already a path → unchanged by the map.
+      { source: 'docs/rules/yy.md', kind: 'reference', blobStartLine: 17, sourceStartLine: 1 },
+    ]);
+  });
 });
 
 describe('parseAssemblyConfig', () => {

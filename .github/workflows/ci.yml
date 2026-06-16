@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-verify-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests (includes prompt-assembly parity vectors)
+        run: npm test
+
+      # The action runs dist/index.js, NOT src/*.ts. If a contributor edits
+      # src/ but forgets `npm run package`, the published action ships stale
+      # behaviour. Rebuild and fail if the committed dist/ differs.
+      - name: Verify dist/ is in sync with src/
+        run: |
+          npm run package
+          if ! git diff --exit-code -- dist; then
+            echo "::error::dist/ is out of date. Run 'npm run package' and commit the result."
+            exit 1
+          fi

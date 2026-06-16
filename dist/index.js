@@ -354,7 +354,7 @@ function globToRegex(glob) {
 function bundleSkillsForPrompt(content, commitSha, skillsDirs) {
     try {
         if (!skillsDirs || skillsDirs.length === 0) {
-            return { assembled: content, bundled: [] };
+            return { assembled: content, bundled: [], paths: {} };
         }
         // Collect candidate skill names from backticked tokens (deduped).
         const candidates = new Set();
@@ -364,8 +364,12 @@ function bundleSkillsForPrompt(content, commitSha, skillsDirs) {
             candidates.add(match[1]);
         }
         if (candidates.size === 0) {
-            return { assembled: content, bundled: [] };
+            return { assembled: content, bundled: [], paths: {} };
         }
+        // (name, body, sourcePath) — sourcePath is the repo path the skill resolved
+        // from; threaded into the manifest so Segment.source is the real path, not
+        // the bare display name (G1 — must match the Python port for one-approach
+        // byte-parity).
         const resolved = [];
         let totalBytes = 0;
         const droppedForCap = [];
@@ -386,10 +390,13 @@ function bundleSkillsForPrompt(content, commitSha, skillsDirs) {
                     candidatePaths.push(`${dir}/${kebab}.md`);
             }
             let body = null;
+            let resolvedPath = null;
             for (const candidate of candidatePaths) {
                 body = gitShowFile(commitSha, candidate);
-                if (body !== null)
+                if (body !== null) {
+                    resolvedPath = candidate;
                     break;
+                }
             }
             if (body === null)
                 continue;
@@ -399,10 +406,10 @@ function bundleSkillsForPrompt(content, commitSha, skillsDirs) {
                 continue;
             }
             totalBytes += bodyBytes;
-            resolved.push({ name, body });
+            resolved.push({ name, body, path: resolvedPath ?? name });
         }
         if (resolved.length === 0) {
-            return { assembled: content, bundled: [] };
+            return { assembled: content, bundled: [], paths: {} };
         }
         let assembled = content;
         for (const { name, body } of resolved) {
@@ -412,11 +419,14 @@ function bundleSkillsForPrompt(content, commitSha, skillsDirs) {
             core.warning(`  Skill bundling: dropped ${droppedForCap.length} skill(s) due to caps (${MAX_SKILLS_PER_PROMPT} skills / ${MAX_SKILLS_BYTES} bytes): ${droppedForCap.join(', ')}`);
         }
         core.info(`  Bundled ${resolved.length} skill(s): ${resolved.map(r => r.name).join(', ')}`);
-        return { assembled, bundled: resolved.map(r => r.name) };
+        const paths = {};
+        for (const { name, path } of resolved)
+            paths[name] = path;
+        return { assembled, bundled: resolved.map(r => r.name), paths };
     }
     catch (error) {
         core.warning(`Skill bundling failed: ${error}. Continuing with raw content.`);
-        return { assembled: content, bundled: [] };
+        return { assembled: content, bundled: [], paths: {} };
     }
 }
 /**
@@ -430,13 +440,13 @@ function bundleSkillsForPrompt(content, commitSha, skillsDirs) {
 function bundleSiblingsForPrompt(content, filePath, commitSha, patterns) {
     try {
         if (!patterns || patterns.length === 0) {
-            return { assembled: content, bundled: [] };
+            return { assembled: content, bundled: [], paths: {} };
         }
         const dir = path.dirname(filePath);
         const base = path.basename(filePath);
         const entries = gitListDir(commitSha, dir);
         if (!entries) {
-            return { assembled: content, bundled: [] };
+            return { assembled: content, bundled: [], paths: {} };
         }
         // A system-prompt is one agent's complete definition. A sibling system-prompt is a
         // DIFFERENT agent — e.g. system-prompt.md (HTML/Vite) vs system-prompt-nextjs.md
@@ -456,8 +466,10 @@ function bundleSiblingsForPrompt(content, filePath, commitSha, patterns) {
             return compiled.some(r => r.test(e));
         });
         if (matching.length === 0) {
-            return { assembled: content, bundled: [] };
+            return { assembled: content, bundled: [], paths: {} };
         }
+        // (name, body, sourcePath) — sourcePath is the dir-relative repo path so the
+        // manifest records the real path, not the bare filename (G1; matches Python).
         const resolved = [];
         let totalBytes = 0;
         const droppedForCap = [];
@@ -466,7 +478,8 @@ function bundleSiblingsForPrompt(content, filePath, commitSha, patterns) {
                 droppedForCap.push(name);
                 continue;
             }
-            const body = gitShowFile(commitSha, `${dir}/${name}`);
+            const sourcePath = `${dir}/${name}`;
+            const body = gitShowFile(commitSha, sourcePath);
             if (body === null)
                 continue;
             const bodyBytes = Buffer.byteLength(body, 'utf-8');
@@ -475,10 +488,10 @@ function bundleSiblingsForPrompt(content, filePath, commitSha, patterns) {
                 continue;
             }
             totalBytes += bodyBytes;
-            resolved.push({ name, body });
+            resolved.push({ name, body, path: sourcePath });
         }
         if (resolved.length === 0) {
-            return { assembled: content, bundled: [] };
+            return { assembled: content, bundled: [], paths: {} };
         }
         let assembled = content;
         for (const { name, body } of resolved) {
@@ -488,11 +501,14 @@ function bundleSiblingsForPrompt(content, filePath, commitSha, patterns) {
             core.warning(`  Sibling bundling: dropped ${droppedForCap.length} file(s) due to caps (${MAX_SIBLINGS_PER_PROMPT} files / ${MAX_SIBLINGS_BYTES} bytes): ${droppedForCap.join(', ')}`);
         }
         core.info(`  Bundled ${resolved.length} sibling(s): ${resolved.map(r => r.name).join(', ')}`);
-        return { assembled, bundled: resolved.map(r => r.name) };
+        const paths = {};
+        for (const { name, path: p } of resolved)
+            paths[name] = p;
+        return { assembled, bundled: resolved.map(r => r.name), paths };
     }
     catch (error) {
         core.warning(`Sibling bundling failed for ${filePath}: ${error}. Continuing with raw content.`);
-        return { assembled: content, bundled: [] };
+        return { assembled: content, bundled: [], paths: {} };
     }
 }
 exports.EMPTY_ASSEMBLY_CONFIG = { injectWhenReferenced: [], requireReference: [] };
@@ -674,7 +690,7 @@ function checkRequiredReferences(content, filePath, config) {
  * file owns everything before the first section. Sent to the engine so it can map
  * model-reported blob lines back to (sourceFile, sourceLine).
  */
-function buildSegmentManifest(assembled, mainSource, knownSections) {
+function buildSegmentManifest(assembled, mainSource, knownSections, sourcePaths) {
     const lines = assembled.split('\n');
     const segments = [{ source: mainSource, kind: 'main', blobStartLine: 1, sourceStartLine: 1 }];
     const headerRe = /^## (Skill|Companion file|Reference): (.+)$/;
@@ -692,8 +708,14 @@ function buildSegmentManifest(assembled, mainSource, knownSections) {
         if (knownSections && !knownSections.has(name))
             continue;
         const kind = m[1] === 'Skill' ? 'skill' : m[1] === 'Companion file' ? 'sibling' : 'reference';
+        // Record the resolved repo PATH in Segment.source (G1 — one-approach parity
+        // with the Python port). Skill/companion headers carry a bare display name;
+        // sourcePaths maps it to the real path. Reference headers are already paths,
+        // so they fall through to `name`. Falls back to the name when no map (keeps
+        // the standalone manifest test + any name-only caller working).
+        const source = sourcePaths?.[name] ?? name;
         // Header at 1-based line i+1; blank at i+2; body starts at i+3.
-        segments.push({ source: name, kind, blobStartLine: i + 3, sourceStartLine: 1 });
+        segments.push({ source, kind, blobStartLine: i + 3, sourceStartLine: 1 });
     }
     return segments;
 }
@@ -1018,12 +1040,16 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         let assembledAfter = (0, file_fetcher_1.resolveTemplateVariables)(after, change.filename, headSha, allPRFilenames);
         let assembledBefore = before ? (0, file_fetcher_1.resolveTemplateVariables)(before, change.filename, baseSha, allPRFilenames) : null;
         const fileBundled = { skills: [], siblings: [] };
+        // Maps each bundled section's display name → resolved repo path, threaded
+        // into buildSegmentManifest so Segment.source is the real path (G1 parity).
+        const sourcePaths = {};
         // Skill bundling — both sides need it so diff analysis sees consistent
         // assembled content rather than flagging "all skills newly added"
         if (skillsDirs.length > 0) {
             const r = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledAfter, headSha, skillsDirs);
             assembledAfter = r.assembled;
             fileBundled.skills = r.bundled;
+            Object.assign(sourcePaths, r.paths);
             if (assembledBefore !== null) {
                 assembledBefore = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledBefore, baseSha, skillsDirs).assembled;
             }
@@ -1034,6 +1060,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             const r = (0, file_fetcher_1.bundleSiblingsForPrompt)(assembledAfter, change.filename, headSha, siblingPatterns);
             assembledAfter = r.assembled;
             fileBundled.siblings = r.bundled;
+            Object.assign(sourcePaths, r.paths);
             if (assembledBefore !== null) {
                 const beforePath = (change.status === 'renamed' && change.previousFilename) ? change.previousFilename : change.filename;
                 assembledBefore = (0, file_fetcher_1.bundleSiblingsForPrompt)(assembledBefore, beforePath, baseSha, siblingPatterns).assembled;
@@ -1060,7 +1087,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         // Provenance manifest (WS-3) — authoritative: only headers for sections we
         // actually bundled become segments. Only sent when something was bundled.
         const knownSections = new Set([...fileBundled.skills, ...fileBundled.siblings, ...injectedRefs]);
-        const segments = (0, file_fetcher_1.buildSegmentManifest)(assembledAfter, change.filename, knownSections);
+        const segments = (0, file_fetcher_1.buildSegmentManifest)(assembledAfter, change.filename, knownSections, sourcePaths);
         apiFiles.push({
             path: change.filename,
             name: (0, path_1.basename)(change.filename),

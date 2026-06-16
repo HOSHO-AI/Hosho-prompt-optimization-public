@@ -1,0 +1,348 @@
+{
+  "spec_version": "1.0.0",
+  "_note": "Shared prompt-assembly golden vectors. Generated from the Python reference impl (src/prompt_assembly.py). Both repos commit an identical copy; each asserts its native impl reproduces these (prompt-assembly/SPEC.md). resolve_location is Python+private-engine only.",
+  "bundle_skills": [
+    {
+      "name": "first-seen order, deduped, two skills",
+      "content": "Use `design-rules`, then `copy-rules`, then `design-rules` again.",
+      "skills": {
+        "skills/design-rules/SKILL.md": "DESIGN BODY line1\nDESIGN BODY line2",
+        "skills/copy-rules/SKILL.md": "COPY BODY",
+        "skills/humanizer.md": "HUMANIZER BODY"
+      },
+      "skills_dirs": [
+        "skills"
+      ],
+      "expected_bundled": [
+        "design-rules",
+        "copy-rules"
+      ],
+      "expected_paths": {
+        "design-rules": "skills/design-rules/SKILL.md",
+        "copy-rules": "skills/copy-rules/SKILL.md"
+      },
+      "expected_assembled": "Use `design-rules`, then `copy-rules`, then `design-rules` again.\n\n---\n\n## Skill: design-rules\n\nDESIGN BODY line1\nDESIGN BODY line2\n\n\n---\n\n## Skill: copy-rules\n\nCOPY BODY\n"
+    },
+    {
+      "name": "fallback to <name>.md; underscore token; unresolved ignored",
+      "content": "Run `bash`, use `humanizer` and `copy_rules`.",
+      "skills": {
+        "skills/design-rules/SKILL.md": "DESIGN BODY line1\nDESIGN BODY line2",
+        "skills/copy-rules/SKILL.md": "COPY BODY",
+        "skills/humanizer.md": "HUMANIZER BODY"
+      },
+      "skills_dirs": [
+        "skills"
+      ],
+      "expected_bundled": [
+        "humanizer",
+        "copy_rules"
+      ],
+      "expected_paths": {
+        "humanizer": "skills/humanizer.md",
+        "copy_rules": "skills/copy-rules/SKILL.md"
+      },
+      "expected_assembled": "Run `bash`, use `humanizer` and `copy_rules`.\n\n---\n\n## Skill: humanizer\n\nHUMANIZER BODY\n\n\n---\n\n## Skill: copy_rules\n\nCOPY BODY\n"
+    }
+  ],
+  "bundle_siblings": [
+    {
+      "name": "matches *prompt*/*addendum*; excludes self, other system-prompt, README",
+      "content": "# Coding agent system prompt",
+      "file_path": "agents/coding/system-prompt.md",
+      "files": {
+        "agents/coding/system-prompt.md": "SYS BODY",
+        "agents/coding/system-prompt-nextjs.md": "NEXTJS SYS BODY",
+        "agents/coding/user-prompt.md": "USER BODY line1\nUSER BODY line2",
+        "agents/coding/draft-addendum.md": "ADDENDUM BODY",
+        "agents/coding/README.md": "README"
+      },
+      "patterns": [
+        "*prompt*.md",
+        "*addendum*.md"
+      ],
+      "expected_bundled": [
+        "draft-addendum.md",
+        "user-prompt.md"
+      ],
+      "expected_paths": {
+        "draft-addendum.md": "agents/coding/draft-addendum.md",
+        "user-prompt.md": "agents/coding/user-prompt.md"
+      },
+      "expected_assembled": "# Coding agent system prompt\n\n---\n\n## Companion file: draft-addendum.md\n\nADDENDUM BODY\n\n\n---\n\n## Companion file: user-prompt.md\n\nUSER BODY line1\nUSER BODY line2\n"
+    }
+  ],
+  "build_segment_manifest": [
+    {
+      "name": "two-skill blob \u2192 main + 2 skill segments (path source)",
+      "assembled": "Use `design-rules`, then `copy-rules`, then `design-rules` again.\n\n---\n\n## Skill: design-rules\n\nDESIGN BODY line1\nDESIGN BODY line2\n\n\n---\n\n## Skill: copy-rules\n\nCOPY BODY\n",
+      "main_source": "agents/main.md",
+      "known_sections": [
+        "copy-rules",
+        "design-rules"
+      ],
+      "source_paths": {
+        "design-rules": "skills/design-rules/SKILL.md",
+        "copy-rules": "skills/copy-rules/SKILL.md"
+      },
+      "expected_segments": [
+        {
+          "source": "agents/main.md",
+          "kind": "main",
+          "blob_start_line": 1,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/design-rules/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 7,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/copy-rules/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 15,
+          "source_start_line": 1
+        }
+      ]
+    },
+    {
+      "name": "phantom header (no separator) ignored",
+      "assembled": "MAIN\n\n---\n\n## Skill: real\n\nbody\n## Skill: fake\nmore\n",
+      "main_source": "m.md",
+      "known_sections": [
+        "real"
+      ],
+      "source_paths": {
+        "real": "skills/real/SKILL.md"
+      },
+      "expected_segments": [
+        {
+          "source": "m.md",
+          "kind": "main",
+          "blob_start_line": 1,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/real/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 7,
+          "source_start_line": 1
+        }
+      ]
+    },
+    {
+      "name": "skill(path) + reference(already path) mix",
+      "assembled": "MAIN\n\n---\n\n## Skill: sk\n\nSK BODY\n\n\n---\n\n## Reference: backend/docs/rules/x.md\n\nREF BODY\n",
+      "main_source": "m.md",
+      "known_sections": [
+        "backend/docs/rules/x.md",
+        "sk"
+      ],
+      "source_paths": {
+        "sk": "skills/sk/SKILL.md"
+      },
+      "expected_segments": [
+        {
+          "source": "m.md",
+          "kind": "main",
+          "blob_start_line": 1,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/sk/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 7,
+          "source_start_line": 1
+        },
+        {
+          "source": "backend/docs/rules/x.md",
+          "kind": "reference",
+          "blob_start_line": 14,
+          "source_start_line": 1
+        }
+      ]
+    }
+  ],
+  "parse_assembly_config": [
+    {
+      "name": "appsmith-v2 real config",
+      "raw": "inject_when_referenced:\n  - backend/docs/rules/agent-security.md\nrequire_reference:\n  - file: backend/docs/rules/agent-security.md\n    for: \"backend/app/llm/**/*prompt*.md\"\n    severity: critical\n",
+      "expected": {
+        "inject_when_referenced": [
+          "backend/docs/rules/agent-security.md"
+        ],
+        "require_reference": [
+          {
+            "file": "backend/docs/rules/agent-security.md",
+            "for": "backend/app/llm/**/*prompt*.md",
+            "severity": "critical"
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty",
+      "raw": "",
+      "expected": {
+        "inject_when_referenced": [],
+        "require_reference": []
+      }
+    }
+  ],
+  "prompt_references_path": [
+    {
+      "content": "see docs/rules/agent-security.md",
+      "path": "backend/docs/rules/agent-security.md",
+      "expected": true
+    },
+    {
+      "content": "mentions agent-security.md",
+      "path": "backend/docs/rules/agent-security.md",
+      "expected": true
+    },
+    {
+      "content": "nothing here",
+      "path": "backend/docs/rules/agent-security.md",
+      "expected": false
+    }
+  ],
+  "check_required_references": [
+    {
+      "name": "nested prompt missing ref \u2192 violation",
+      "content": "agent",
+      "file_path": "backend/app/llm/orchestrator_agent/system-prompt.md",
+      "config_raw": "inject_when_referenced:\n  - backend/docs/rules/agent-security.md\nrequire_reference:\n  - file: backend/docs/rules/agent-security.md\n    for: \"backend/app/llm/**/*prompt*.md\"\n    severity: critical\n",
+      "expected_violated_files": [
+        "backend/docs/rules/agent-security.md"
+      ]
+    },
+    {
+      "name": "top-level (zero dirs) missing ref \u2192 violation",
+      "content": "agent",
+      "file_path": "backend/app/llm/system-prompt.md",
+      "config_raw": "inject_when_referenced:\n  - backend/docs/rules/agent-security.md\nrequire_reference:\n  - file: backend/docs/rules/agent-security.md\n    for: \"backend/app/llm/**/*prompt*.md\"\n    severity: critical\n",
+      "expected_violated_files": [
+        "backend/docs/rules/agent-security.md"
+      ]
+    },
+    {
+      "name": "single-* does NOT cross dir (minimatch) \u2192 no violation",
+      "content": "agent",
+      "file_path": "backend/app/llm/orchestrator_agent/system-prompt.md",
+      "config_raw": "require_reference:\n  - file: backend/docs/rules/agent-security.md\n    for: \"backend/app/llm/*.md\"\n    severity: critical\n",
+      "expected_violated_files": []
+    },
+    {
+      "name": "references the doc \u2192 no violation",
+      "content": "see backend/docs/rules/agent-security.md",
+      "file_path": "backend/app/llm/orchestrator_agent/system-prompt.md",
+      "config_raw": "inject_when_referenced:\n  - backend/docs/rules/agent-security.md\nrequire_reference:\n  - file: backend/docs/rules/agent-security.md\n    for: \"backend/app/llm/**/*prompt*.md\"\n    severity: critical\n",
+      "expected_violated_files": []
+    }
+  ],
+  "resolve_location": [
+    {
+      "name": "snippet in bundled skill \u2192 skill path, out of change set",
+      "blob": "Use `design-rules`, then `copy-rules`, then `design-rules` again.\n\n---\n\n## Skill: design-rules\n\nDESIGN BODY line1\nDESIGN BODY line2\n\n\n---\n\n## Skill: copy-rules\n\nCOPY BODY\n",
+      "segments": [
+        {
+          "source": "agents/main.md",
+          "kind": "main",
+          "blob_start_line": 1,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/design-rules/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 7,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/copy-rules/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 15,
+          "source_start_line": 1
+        }
+      ],
+      "main_source": "agents/main.md",
+      "echoed_start": 0,
+      "echoed_end": 0,
+      "code": "COPY BODY",
+      "expected": {
+        "source_file": "skills/copy-rules/SKILL.md",
+        "source_start_line": 1,
+        "source_end_line": 1,
+        "source_in_change_set": false
+      }
+    },
+    {
+      "name": "snippet in main \u2192 in change set",
+      "blob": "Use `design-rules`, then `copy-rules`, then `design-rules` again.\n\n---\n\n## Skill: design-rules\n\nDESIGN BODY line1\nDESIGN BODY line2\n\n\n---\n\n## Skill: copy-rules\n\nCOPY BODY\n",
+      "segments": [
+        {
+          "source": "agents/main.md",
+          "kind": "main",
+          "blob_start_line": 1,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/design-rules/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 7,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/copy-rules/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 15,
+          "source_start_line": 1
+        }
+      ],
+      "main_source": "agents/main.md",
+      "echoed_start": 1,
+      "echoed_end": 1,
+      "code": "Use `design-rules`, then `copy-rules`, then `design-rules` again.",
+      "expected": {
+        "source_file": "agents/main.md",
+        "source_start_line": 1,
+        "source_end_line": 1,
+        "source_in_change_set": true
+      }
+    },
+    {
+      "name": "unanchorable + no echoed line \u2192 file-level line 0",
+      "blob": "Use `design-rules`, then `copy-rules`, then `design-rules` again.\n\n---\n\n## Skill: design-rules\n\nDESIGN BODY line1\nDESIGN BODY line2\n\n\n---\n\n## Skill: copy-rules\n\nCOPY BODY\n",
+      "segments": [
+        {
+          "source": "agents/main.md",
+          "kind": "main",
+          "blob_start_line": 1,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/design-rules/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 7,
+          "source_start_line": 1
+        },
+        {
+          "source": "skills/copy-rules/SKILL.md",
+          "kind": "skill",
+          "blob_start_line": 15,
+          "source_start_line": 1
+        }
+      ],
+      "main_source": "agents/main.md",
+      "echoed_start": 0,
+      "echoed_end": 0,
+      "code": "ZZZ NONEXISTENT",
+      "expected": {
+        "source_file": "agents/main.md",
+        "source_start_line": 0,
+        "source_end_line": 0,
+        "source_in_change_set": true
+      }
+    }
+  ]
+}

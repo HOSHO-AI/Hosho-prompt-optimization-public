@@ -252,6 +252,9 @@ async function runPRMode(
     let assembledBefore = before ? resolveTemplateVariables(before, change.filename, baseSha, allPRFilenames) : null;
 
     const fileBundled = { skills: [] as string[], siblings: [] as string[] };
+    // Maps each bundled section's display name → resolved repo path, threaded
+    // into buildSegmentManifest so Segment.source is the real path (G1 parity).
+    const sourcePaths: Record<string, string> = {};
 
     // Skill bundling — both sides need it so diff analysis sees consistent
     // assembled content rather than flagging "all skills newly added"
@@ -259,6 +262,7 @@ async function runPRMode(
       const r = bundleSkillsForPrompt(assembledAfter, headSha, skillsDirs);
       assembledAfter = r.assembled;
       fileBundled.skills = r.bundled;
+      Object.assign(sourcePaths, r.paths);
       if (assembledBefore !== null) {
         assembledBefore = bundleSkillsForPrompt(assembledBefore, baseSha, skillsDirs).assembled;
       }
@@ -270,6 +274,7 @@ async function runPRMode(
       const r = bundleSiblingsForPrompt(assembledAfter, change.filename, headSha, siblingPatterns);
       assembledAfter = r.assembled;
       fileBundled.siblings = r.bundled;
+      Object.assign(sourcePaths, r.paths);
       if (assembledBefore !== null) {
         const beforePath = (change.status === 'renamed' && change.previousFilename) ? change.previousFilename : change.filename;
         assembledBefore = bundleSiblingsForPrompt(assembledBefore, beforePath, baseSha, siblingPatterns).assembled;
@@ -300,7 +305,7 @@ async function runPRMode(
     // Provenance manifest (WS-3) — authoritative: only headers for sections we
     // actually bundled become segments. Only sent when something was bundled.
     const knownSections = new Set<string>([...fileBundled.skills, ...fileBundled.siblings, ...injectedRefs]);
-    const segments = buildSegmentManifest(assembledAfter, change.filename, knownSections);
+    const segments = buildSegmentManifest(assembledAfter, change.filename, knownSections, sourcePaths);
 
     apiFiles.push({
       path: change.filename,
