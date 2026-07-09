@@ -6,10 +6,105 @@ import {
   FactorInsight,
   Finding,
   CustomPrinciplesResult,
+  MacroScore,
 } from './types';
 
 const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
+
+// ---- v3 taxonomy (4 macros / 14 sub-factors) — display labels + routing ----
+// Single source for the "Macro — Sub" tag on every findings list, plus the macro
+// bucketing behind the 4-row score table. Mirrors the API's factors/taxonomy-v3.
+
+const MACRO_ORDER = ['scope', 'structure', 'guidance', 'coherence'] as const;
+
+const MACRO_LABELS: Record<string, string> = {
+  scope: 'Scope',
+  structure: 'Structure',
+  guidance: 'Guidance',
+  coherence: 'Coherence',
+};
+
+const SUB_LABELS: Record<string, string> = {
+  focus: 'Focus',
+  load: 'Volume',
+  layout: 'Layout',
+  tools: 'Tools & skills',
+  'model-fit': 'Provider fit',
+  output: 'Output & validation',
+  goal: 'Goal',
+  inputs: 'Inputs',
+  'method-reasoning': 'Method & reasoning',
+  safety: 'Safety',
+  clarity: 'Clarity',
+  criteria: 'Criteria',
+  consistency: 'Consistency',
+  bloat: 'Bloat',
+};
+
+const SUB_TO_MACRO: Record<string, string> = {
+  focus: 'scope', load: 'scope',
+  layout: 'structure', tools: 'structure', 'model-fit': 'structure', output: 'structure',
+  goal: 'guidance', inputs: 'guidance', 'method-reasoning': 'guidance', safety: 'guidance',
+  clarity: 'coherence', criteria: 'coherence', consistency: 'coherence', bloat: 'coherence',
+};
+
+// Best-effort mapping for a legacy v2 factor id → macro (only reached when a result
+// predates v3 and carries no macro/sub tags — keeps the table 4-row rather than 6-row).
+const LEGACY_FACTOR_TO_MACRO: Record<string, string> = {
+  scope: 'scope',
+  'structure-flow': 'structure',
+  'output-validation': 'structure',
+  'model-specific-prompting': 'structure',
+  'context-guidance': 'guidance',
+  constraints: 'guidance',
+};
+
+function macroLabel(id?: string): string {
+  if (!id) return '';
+  return MACRO_LABELS[id] ?? id;
+}
+
+function subLabel(id?: string): string {
+  if (!id) return '';
+  return SUB_LABELS[id] ?? id;
+}
+
+/** Resolve a factor/sub id to its macro id, or undefined if it can't be routed. */
+function macroForId(id?: string): string | undefined {
+  if (!id) return undefined;
+  if (MACRO_LABELS[id]) return id;                 // already a macro id
+  return SUB_TO_MACRO[id] ?? LEGACY_FACTOR_TO_MACRO[id];
+}
+
+/**
+ * The "Macro — Sub" tag for a changeSummary item. Prefers the v3 tags; falls back
+ * to the legacy `category` string (so custom-principle + untagged items still render).
+ * Returns '' when nothing is available (caller omits the prefix).
+ */
+function changeItemTag(item: ChangeItem): string {
+  if (item.macroFactor) {
+    const macro = macroLabel(item.macroFactor);
+    const sub = subLabel(item.subFactor);
+    return sub ? `${macro} — ${sub}` : macro;
+  }
+  return item.category ? sanitizeInlineText(item.category) : '';
+}
+
+/**
+ * The "Macro — Sub" tag for a finding, given its parent factor id/name. Prefers the
+ * finding's own v3 tags, then the parent factor id (a sub-factor id in v3 improve),
+ * then the legacy factor name.
+ */
+function findingTag(f: Finding, factorId: string, factorName: string): string {
+  const macroId = f.macroFactor ?? macroForId(factorId);
+  const subId = f.subFactor ?? (SUB_TO_MACRO[factorId] ? factorId : undefined);
+  if (macroId && MACRO_LABELS[macroId]) {
+    const sub = subLabel(subId);
+    return sub ? `${macroLabel(macroId)} — ${sub}` : macroLabel(macroId);
+  }
+  return sanitizeInlineText(factorName);
+}
 
 // ---- Helpers ----
 
@@ -142,38 +237,99 @@ function formatDiffSnippet(comp: ComparisonResult): string {
   return `**The Change:**\n\n${fence}diff\n${comp.diffSnippet}\n${fence}\n\n`;
 }
 
+/** Worst change direction across a macro's sub-factors (for the PR-impact column). */
+function aggregateDirection(
+  insights: FactorInsight[],
+): FactorInsight['changeDirection'] | undefined {
+  const dirs = insights.map(i => i.changeDirection).filter(Boolean) as string[];
+  if (dirs.length === 0) return undefined;
+  if (dirs.includes('worse')) return 'worse';
+  if (dirs.includes('mixed')) return 'mixed';
+  if (dirs.includes('improved')) return 'improved';
+  return 'no-change';
+}
+
+/** Join a macro's sub-factor rationales, each prefixed with its sub label, deduped. */
+function macroRationale(
+  items: Array<{ factorId: string; tableRationale?: string; changeRationale?: string }>,
+  key: 'tableRationale' | 'changeRationale',
+): string {
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  for (const it of items) {
+    const t = (it[key] ?? '').trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    const sub = SUB_TO_MACRO[it.factorId] ? subLabel(it.factorId) : '';
+    parts.push(sub ? `<b>${sub}:</b> ${sanitizeInlineText(t)}` : sanitizeInlineText(t));
+  }
+  return parts.join('<br>');
+}
+
+// Score/roll-up table at the 4-MACRO level only (never the 6 legacy factors). Prefers the
+// API's `macroScores` for each macro's number; aggregates the sub-factor results/insights for
+// the rationale text and (PR mode) the change direction.
 function formatTable(
   factorResults: FactorEvaluationResult[],
   insights: FactorInsight[],
   customPrinciplesResult?: CustomPrinciplesResult,
+  macroScores?: MacroScore[],
 ): string {
   const isPRMode = insights.some(f => f.changeDirection);
 
+  // Bucket sub-factor (v3) / legacy-factor results + insights into the 4 macros.
+  const buckets = new Map<string, { results: FactorEvaluationResult[]; insights: FactorInsight[] }>();
+  const bucket = (macro: string) => {
+    let b = buckets.get(macro);
+    if (!b) { b = { results: [], insights: [] }; buckets.set(macro, b); }
+    return b;
+  };
+  for (const fr of factorResults) {
+    const macro = macroForId(fr.factorId);
+    if (macro) bucket(macro).results.push(fr);
+  }
+  for (const ins of insights) {
+    const macro = macroForId(ins.factorId);
+    if (macro) bucket(macro).insights.push(ins);
+  }
+
+  const macroScoreMap = new Map((macroScores ?? []).map(m => [m.macro, m]));
+  const rows = MACRO_ORDER.filter(
+    m => macroScoreMap.has(m) || (buckets.get(m)?.results.length ?? 0) > 0,
+  );
+
   let md = '';
   if (isPRMode) {
-    md += `| Factor | PR Impact | Overall Prompt Score | Rationale |\n`;
+    md += `| Macro Factor | PR Impact | Overall Prompt Score | Rationale |\n`;
     md += `|---|---|---|---|`;
   } else {
-    md += `| Factor | Score | Rationale |\n`;
+    md += `| Macro Factor | Score | Rationale |\n`;
     md += `|---|---|---|`;
   }
 
-  for (const factor of factorResults) {
-    const emoji = getTrafficLightEmoji(factor.score);
-    const insight = insights.find(f => f.factorId === factor.factorId);
+  for (const macro of rows) {
+    const b = buckets.get(macro);
+    const memberResults = b?.results ?? [];
+    const ms = macroScoreMap.get(macro);
+    const score = ms
+      ? ms.score
+      : memberResults.length
+        ? Math.round(memberResults.reduce((s, r) => s + r.score, 0) / memberResults.length)
+        : 0;
+    const emoji = getTrafficLightEmoji(score);
+    const scoreRationale = macroRationale(memberResults, 'tableRationale') || '—';
 
-    if (isPRMode && insight?.changeDirection) {
-      const changeEmoji = getChangeEmoji(insight.changeDirection);
-      const prRationale = sanitizeInlineText(insight.changeRationale || '—');
-      const scoreRationale = sanitizeInlineText(factor.tableRationale || '—');
-      md += `\n| ${factor.factorName} | ${changeEmoji} | ${emoji} | <b><u>PR rationale:</u></b> ${prRationale}<br><b><u>Score rationale:</u></b> ${scoreRationale} |`;
+    if (isPRMode) {
+      const dir = aggregateDirection(b?.insights ?? []);
+      const changeEmoji = dir ? getChangeEmoji(dir) : '➖';
+      const prRationale = macroRationale(b?.insights ?? [], 'changeRationale') || '—';
+      md += `\n| ${macroLabel(macro)} | ${changeEmoji} | ${emoji} | <b><u>PR rationale:</u></b> ${prRationale}<br><b><u>Score rationale:</u></b> ${scoreRationale} |`;
     } else {
-      const rationale = sanitizeInlineText(factor.tableRationale || '—');
-      md += `\n| ${factor.factorName} | ${emoji} | ${rationale} |`;
+      md += `\n| ${macroLabel(macro)} | ${emoji} | ${scoreRationale} |`;
     }
   }
 
-  // Custom principles row (if present — separate from standard 6 factors)
+  // Custom principles row (kept — separate from the macro roll-up, excluded from overall)
   if (customPrinciplesResult && customPrinciplesResult.score > 0) {
     const emoji = getTrafficLightEmoji(customPrinciplesResult.score);
     const rationale = sanitizeInlineText(customPrinciplesResult.tableRationale || '—');
@@ -226,7 +382,7 @@ function formatEditLine(tagged: TaggedFinding): string {
     line = `**${sanitizeInlineText(title)}**`;
   }
 
-  return `${line} — See ${tagged.factorName} (${f.findingNumber})`;
+  return `${line} — See ${findingTag(f, tagged.factorId, tagged.factorName)} (${f.findingNumber})`;
 }
 
 function formatTopEdits(tagged: TaggedFinding[], limit: number = 3): string {
@@ -252,7 +408,8 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
   for (const item of sorted) {
     const emoji = item.effect === 'positive' ? '✅'
       : item.severity === 'critical' ? '⛔' : '⚠️';
-    const categoryPrefix = item.category ? `**${sanitizeInlineText(item.category)}** — ` : '';
+    const tag = changeItemTag(item);
+    const categoryPrefix = tag ? `**${tag}** — ` : '';
     const change = sanitizeInlineText(item.change);
     const impact = item.impact ? ` — ${sanitizeInlineText(item.impact)}` : '';
     md += `- ${emoji} ${categoryPrefix}${change}${impact}\n`;
@@ -320,7 +477,8 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
         md += `**${fixLabel}: ${sanitizeInlineText(first.revert!)}** *(line ${lineRef})*\n\n`;
         md += `This change was flagged by multiple quality factors:\n`;
         for (const item of group) {
-          const cat = item.category ? `**${sanitizeInlineText(item.category)}**` : 'Review';
+          const tag = changeItemTag(item);
+          const cat = tag ? `**${tag}**` : 'Review';
           md += `- ${cat} — ${sanitizeInlineText(item.change)} — ${sanitizeInlineText(item.impact)}\n`;
         }
         md += '\n';
@@ -365,14 +523,17 @@ function formatLocation(cs: NonNullable<Finding['codeSnippet']>): string {
   return hasLine ? `line ${lineRef}` : 'file-level';
 }
 
-function formatFindingDetail(finding: Finding, factorId?: string): string {
+function formatFindingDetail(finding: Finding, factorId?: string, subTag?: string): string {
   let md = '';
   const anchorId = factorId ? `${factorId}-${finding.findingNumber}` : '';
 
+  // Sub-factor label prefix (v3) — the appendix groups under the 4 macros, so each
+  // finding names its sub inline. Empty when the finding can't be routed to a sub.
+  const subPrefix = subTag ? `${subTag} — ` : '';
   const title = finding.codeSnippet?.issue || finding.description;
 
   if (finding.codeSnippet && finding.codeSnippet.code.trim()) {
-    md += `**<u>${finding.findingNumber}. ${title} (${formatLocation(finding.codeSnippet)})</u>**\n\n`;
+    md += `**<u>${finding.findingNumber}. ${subPrefix}${title} (${formatLocation(finding.codeSnippet)})</u>**\n\n`;
 
     const cleanedCode = cleanCodeSnippet(finding.codeSnippet.code);
     if (cleanedCode.trim()) {
@@ -381,7 +542,7 @@ function formatFindingDetail(finding: Finding, factorId?: string): string {
       md += `${codeFence}\n${cleanedCode}\n${codeFence}\n\n`;
     }
   } else {
-    md += `**<u>${finding.findingNumber}. ${title}</u>**\n\n`;
+    md += `**<u>${finding.findingNumber}. ${subPrefix}${title}</u>**\n\n`;
   }
 
   md += `**Suggested fix:** ${sanitizeInlineText(finding.consideration)}\n\n`;
@@ -410,14 +571,42 @@ function formatAllFindings(
     md += tableContent;
   }
 
+  // Group findings under the 4 MACRO headers (v3). Each finding is sub-labeled with its
+  // sub-factor. Insights that can't be routed to a macro fall back to their own header.
+  const byMacro = new Map<string, FactorInsight[]>();
+  const unrouted: FactorInsight[] = [];
   for (const insight of withFindings) {
-    md += `#### ${insight.factorName.toUpperCase()}\n\n`;
-    for (const finding of insight.findings) {
-      md += formatFindingDetail(finding, insight.factorId);
+    const macro = macroForId(insight.factorId);
+    if (macro) {
+      const list = byMacro.get(macro) ?? [];
+      list.push(insight);
+      byMacro.set(macro, list);
+    } else {
+      unrouted.push(insight);
     }
   }
 
-  // Custom principles findings (separate from standard 6 factors)
+  const renderInsight = (insight: FactorInsight) => {
+    for (const finding of insight.findings) {
+      const subId = finding.subFactor ?? (SUB_TO_MACRO[insight.factorId] ? insight.factorId : undefined);
+      md += formatFindingDetail(finding, insight.factorId, subId ? subLabel(subId) : undefined);
+    }
+  };
+
+  for (const macro of MACRO_ORDER) {
+    const list = byMacro.get(macro);
+    if (!list || list.length === 0) continue;
+    md += `#### ${macroLabel(macro).toUpperCase()}\n\n`;
+    for (const insight of list) renderInsight(insight);
+  }
+
+  // Legacy/unrouted insights keep their own factor-name header.
+  for (const insight of unrouted) {
+    md += `#### ${insight.factorName.toUpperCase()}\n\n`;
+    renderInsight(insight);
+  }
+
+  // Custom principles findings (separate from the macro roll-up)
   if (hasCustomFindings) {
     md += `#### CUSTOM PRINCIPLES\n\n`;
     for (const finding of customPrinciplesResult!.findings) {
@@ -437,11 +626,12 @@ export function formatOnDemandSummary(
   factorResults: FactorEvaluationResult[],
   targetModelFamily?: string,
   targetModelName?: string,
+  macroScores?: MacroScore[],
 ): string {
   const enrichedInsights = mergeFindings(synthesis.factorInsights, factorResults);
 
   let md = formatHeader(synthesis.promptFile, synthesis.promptDescription, targetModelFamily, targetModelName);
-  md += formatTable(factorResults, enrichedInsights);
+  md += formatTable(factorResults, enrichedInsights, undefined, macroScores);
 
   // Top 3 edits
   const allFindings = gatherFindings(enrichedInsights);
@@ -499,7 +689,7 @@ function formatPRFileSection(
   }
 
   // Collapsed detail (table + ALL findings)
-  const tableContent = formatTable(comp.factorResults, enrichedInsights, comp.customPrinciplesResult);
+  const tableContent = formatTable(comp.factorResults, enrichedInsights, comp.customPrinciplesResult, comp.macroScores);
   md += formatAllFindings(enrichedInsights, tableContent, comp.customPrinciplesResult);
 
   return md;

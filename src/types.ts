@@ -46,6 +46,10 @@ export interface Finding {
   };
   consideration: string;
   rewrittenCode?: string;
+  // v3 display-taxonomy tags (internal keys only; derived from assessmentId by the API).
+  // Renderers prefer these; they fall back to the parent factor's name when absent.
+  subFactor?: string;
+  macroFactor?: string;
 }
 
 export interface FactorEvaluationResult {
@@ -102,7 +106,14 @@ export interface ChangeItem {
   impact: string;
   effect: 'positive' | 'negative';
   severity?: 'critical' | 'suggestion';
-  category?: string;
+  category?: string; // LEGACY factor/principle label. Kept for back-compat + as the fallback
+                     // tag when the v3 macro/sub tags below are absent.
+  // v3 taxonomy tag: `assessmentId` is the criterion the API mapped this change to;
+  // `subFactor`/`macroFactor` are derived from it. Renderers label "Macro — Sub" and
+  // fall back to `category` when `macroFactor` is absent.
+  assessmentId?: string;
+  subFactor?: string;
+  macroFactor?: string;
   revert?: string;
   revertDetail?: {
     currentCode: string;
@@ -113,6 +124,17 @@ export interface ChangeItem {
     sourceFile?: string;
     sourceInChangeSet?: boolean;
   };
+}
+
+// ---- Macro-native scorecard (v3, improve mode) ----
+
+// Per-macro roll-up score sent by the API in improve mode. One of the 4 macros
+// (scope / structure / guidance / coherence). Drives the 4-row macro score table.
+export interface MacroScore {
+  macro: string;        // 'scope' | 'structure' | 'guidance' | 'coherence'
+  score: number;        // 1-10, rounded mean of the macro's sub-factors
+  scoreLabel: string;
+  subFactors: string[]; // sub-factor ids rolled into this macro
 }
 
 // ---- Custom Principles Result (improve mode) ----
@@ -151,6 +173,7 @@ export interface ComparisonResult {
   hasCriticalIssue: boolean;
   promptContent?: string;
   customPrinciplesResult?: CustomPrinciplesResult;
+  macroScores?: MacroScore[]; // v3 macro roll-up (improve mode); drives the 4-row score table
 }
 
 // ---- File Types ----
