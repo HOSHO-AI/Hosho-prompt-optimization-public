@@ -113,6 +113,11 @@ function createMockComparison(overrides: Partial<ComparisonResult> = {}): Compar
         assessments: [],
       },
     ],
+    macroScores: [
+      { macro: 'scope', score: 9, scoreLabel: 'Good', subFactors: ['focus', 'load'] },
+      { macro: 'structure', score: 6, scoreLabel: 'Needs Work', subFactors: ['layout', 'tools', 'model-fit', 'output'] },
+      { macro: 'guidance', score: 2, scoreLabel: 'Critical', subFactors: ['goal', 'inputs', 'method-reasoning', 'safety'] },
+    ],
     deltas: [],
     hasRegression: false,
     hasCriticalIssue: true,
@@ -140,12 +145,12 @@ describe('formatPRComment', () => {
     expect(result).not.toContain('Target model:');
   });
 
-  it('shows factor table with traffic light emojis', () => {
+  it('shows macro table with traffic light emojis', () => {
     const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
-    expect(result).toContain('| Factor | Score |');
+    expect(result).toContain('| Macro Factor | Score |');
     expect(result).toContain('| Scope | 🟢 |');
-    expect(result).toContain('| Prompt Injection Resistance | 🔴 |');
-    expect(result).toContain('| Structure/Flow | 🟡 |');
+    expect(result).toContain('| Guidance | 🔴 |');
+    expect(result).toContain('| Structure | 🟡 |');
   });
 
   it('shows correct traffic light emojis based on scores', () => {
@@ -165,8 +170,10 @@ describe('formatPRComment', () => {
   it('shows detailed findings section with factor headers', () => {
     const result = formatPRComment([createMockComparison()], 42, 'test-org/test-repo');
     expect(result).toContain('### APPENDIX: FURTHER PROMPT IMPROVEMENTS');
+    // Unroutable legacy factor ids keep their own header (fallback); routable ones
+    // group under their MACRO header.
     expect(result).toContain('#### PROMPT INJECTION RESISTANCE');
-    expect(result).toContain('#### STRUCTURE/FLOW');
+    expect(result).toContain('#### STRUCTURE');
     expect(result).not.toContain('<details><summary>');
   });
 
@@ -483,7 +490,7 @@ describe('formatOnDemandSummary', () => {
     ];
 
     const result = formatOnDemandSummary(synthesis, factorResults);
-    expect(result).toContain('| Factor | Score |');
+    expect(result).toContain('| Macro Factor | Score |');
     expect(result).toContain('| Scope | 🟡 |');
   });
 

@@ -365,6 +365,8 @@ async function runPRMode(
           effect: 'negative' as const,
           severity: v.severity,
           category: 'Security doc reference',
+          macroFactor: 'guidance',
+          subFactor: 'safety',
         }
       : {
           change: `Consider referencing \`${v.file}\``,
@@ -372,6 +374,8 @@ async function runPRMode(
           effect: 'negative' as const,
           severity: v.severity,
           category: 'Security doc reference',
+          macroFactor: 'guidance',
+          subFactor: 'safety',
         });
     result.changeSummary = [...(result.changeSummary ?? []), ...items];
   }
@@ -393,6 +397,7 @@ async function runPRMode(
     targetModelName: r.targetModelName,
     changeSummary: r.changeSummary,
     customPrinciplesResult: r.customPrinciplesResult,
+    macroScores: r.macroScores,
   }));
 
   // Attach diff snippets and scopeSummary to comparisons
@@ -486,7 +491,7 @@ async function runOnDemandMode(
 
   // Write Job Summary
   core.info('Writing Job Summary...');
-  const summaryBody = formatOnDemandSummary(result.synthesis, result.factorResults, result.targetModelFamily, result.targetModelName);
+  const summaryBody = formatOnDemandSummary(result.synthesis, result.factorResults, result.targetModelFamily, result.targetModelName, result.macroScores);
   await core.summary.addRaw(summaryBody).write();
 
   // Set outputs
