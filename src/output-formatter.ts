@@ -35,7 +35,6 @@ const SUB_LABELS: Record<string, string> = {
   goal: 'Goal',
   inputs: 'Inputs',
   'method-reasoning': 'Method & reasoning',
-  safety: 'Safety',
   clarity: 'Clarity',
   criteria: 'Criteria',
   consistency: 'Consistency',
@@ -44,8 +43,8 @@ const SUB_LABELS: Record<string, string> = {
 
 const SUB_TO_MACRO: Record<string, string> = {
   focus: 'scope', load: 'scope',
-  layout: 'structure', tools: 'structure', 'model-fit': 'structure', output: 'structure',
-  goal: 'guidance', inputs: 'guidance', 'method-reasoning': 'guidance', safety: 'guidance',
+  layout: 'structure', tools: 'structure', output: 'structure',
+  goal: 'guidance', inputs: 'guidance', 'method-reasoning': 'guidance', 'model-fit': 'guidance',
   clarity: 'coherence', criteria: 'coherence', consistency: 'coherence', bloat: 'coherence',
 };
 
@@ -55,7 +54,7 @@ const LEGACY_FACTOR_TO_MACRO: Record<string, string> = {
   scope: 'scope',
   'structure-flow': 'structure',
   'output-validation': 'structure',
-  'model-specific-prompting': 'structure',
+  'model-specific-prompting': 'guidance',
   'context-guidance': 'guidance',
   constraints: 'guidance',
 };

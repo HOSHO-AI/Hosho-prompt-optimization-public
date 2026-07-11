@@ -366,7 +366,7 @@ async function runPRMode(
           severity: v.severity,
           category: 'Security doc reference',
           macroFactor: 'guidance',
-          subFactor: 'safety',
+          subFactor: 'inputs',
         }
       : {
           change: `Consider referencing \`${v.file}\``,
@@ -375,7 +375,7 @@ async function runPRMode(
           severity: v.severity,
           category: 'Security doc reference',
           macroFactor: 'guidance',
-          subFactor: 'safety',
+          subFactor: 'inputs',
         });
     result.changeSummary = [...(result.changeSummary ?? []), ...items];
   }
