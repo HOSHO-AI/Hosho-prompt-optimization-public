@@ -115,8 +115,8 @@ function createMockComparison(overrides: Partial<ComparisonResult> = {}): Compar
     ],
     macroScores: [
       { macro: 'scope', score: 9, scoreLabel: 'Good', subFactors: ['focus', 'load'] },
-      { macro: 'structure', score: 6, scoreLabel: 'Needs Work', subFactors: ['layout', 'tools', 'model-fit', 'output'] },
-      { macro: 'guidance', score: 2, scoreLabel: 'Critical', subFactors: ['goal', 'inputs', 'method-reasoning', 'safety'] },
+      { macro: 'structure', score: 6, scoreLabel: 'Needs Work', subFactors: ['layout', 'tools', 'output'] },
+      { macro: 'guidance', score: 2, scoreLabel: 'Critical', subFactors: ['goal', 'inputs', 'method-reasoning', 'model-fit'] },
     ],
     deltas: [],
     hasRegression: false,

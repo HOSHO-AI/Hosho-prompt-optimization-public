@@ -1334,7 +1334,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 severity: v.severity,
                 category: 'Security doc reference',
                 macroFactor: 'guidance',
-                subFactor: 'safety',
+                subFactor: 'inputs',
             }
             : {
                 change: `Consider referencing \`${v.file}\``,
@@ -1343,7 +1343,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 severity: v.severity,
                 category: 'Security doc reference',
                 macroFactor: 'guidance',
-                subFactor: 'safety',
+                subFactor: 'inputs',
             });
         result.changeSummary = [...(result.changeSummary ?? []), ...items];
     }
@@ -1532,7 +1532,6 @@ const SUB_LABELS = {
     goal: 'Goal',
     inputs: 'Inputs',
     'method-reasoning': 'Method & reasoning',
-    safety: 'Safety',
     clarity: 'Clarity',
     criteria: 'Criteria',
     consistency: 'Consistency',
@@ -1540,8 +1539,8 @@ const SUB_LABELS = {
 };
 const SUB_TO_MACRO = {
     focus: 'scope', load: 'scope',
-    layout: 'structure', tools: 'structure', 'model-fit': 'structure', output: 'structure',
-    goal: 'guidance', inputs: 'guidance', 'method-reasoning': 'guidance', safety: 'guidance',
+    layout: 'structure', tools: 'structure', output: 'structure',
+    goal: 'guidance', inputs: 'guidance', 'method-reasoning': 'guidance', 'model-fit': 'guidance',
     clarity: 'coherence', criteria: 'coherence', consistency: 'coherence', bloat: 'coherence',
 };
 // Best-effort mapping for a legacy v2 factor id → macro (only reached when a result
@@ -1550,7 +1549,7 @@ const LEGACY_FACTOR_TO_MACRO = {
     scope: 'scope',
     'structure-flow': 'structure',
     'output-validation': 'structure',
-    'model-specific-prompting': 'structure',
+    'model-specific-prompting': 'guidance',
     'context-guidance': 'guidance',
     constraints: 'guidance',
 };
