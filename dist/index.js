@@ -1512,7 +1512,7 @@ exports.formatReviewJobSummary = formatReviewJobSummary;
 const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
 exports.BOT_MARKER = BOT_MARKER;
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
-// ---- v3 taxonomy (4 macros / 14 sub-factors) — display labels + routing ----
+// ---- v3 taxonomy (4 macros / 13 sub-factors) — display labels + routing ----
 // Single source for the "Macro — Sub" tag on every findings list, plus the macro
 // bucketing behind the 4-row score table. Mirrors the API's factors/taxonomy-v3.
 const MACRO_ORDER = ['scope', 'structure', 'guidance', 'coherence'];
