@@ -105,7 +105,6 @@ export interface ChangeItem {
   change: string;
   impact: string;
   effect: 'positive' | 'negative';
-  severity?: 'critical' | 'suggestion';
   category?: string; // LEGACY factor/principle label. Kept for back-compat + as the fallback
                      // tag when the v3 macro/sub tags below are absent.
   // v3 taxonomy tag: `assessmentId` is the criterion the API mapped this change to;
