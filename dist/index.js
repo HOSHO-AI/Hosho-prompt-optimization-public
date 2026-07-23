@@ -1331,6 +1331,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 change: `This PR removes the reference to \`${v.file}\``,
                 impact: `The previous version of this prompt referenced \`${v.file}\` (a configured convention for \`${v.for}\`); this change drops it.`,
                 effect: 'negative',
+                severity: v.severity,
                 category: 'Security doc reference',
                 macroFactor: 'guidance',
                 subFactor: 'inputs',
@@ -1339,6 +1340,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 change: `Consider referencing \`${v.file}\``,
                 impact: `This prompt ${v.reason} and operates in the surface \`${v.file}\` governs, but neither links to nor states those shared rules. Advisory: security is also enforced in code, so this is a maintainability suggestion.`,
                 effect: 'negative',
+                severity: v.severity,
                 category: 'Security doc reference',
                 macroFactor: 'guidance',
                 subFactor: 'inputs',
@@ -1810,6 +1812,9 @@ function formatTable(factorResults, insights, customPrinciplesResult, macroScore
 function formatVerdict(changeSummary) {
     if (!changeSummary || changeSummary.length === 0)
         return '**Verdict:** ✅ Approve This PR\n\n';
+    const hasCritical = changeSummary.some(c => c.effect === 'negative' && c.severity === 'critical');
+    if (hasCritical)
+        return '**Verdict:** ⛔ Request Changes\n\n';
     const hasSuggestions = changeSummary.some(c => c.effect === 'negative');
     if (hasSuggestions)
         return '**Verdict:** ✅ Approve — with suggestions\n\n';
@@ -1859,7 +1864,8 @@ function formatWhatChanged(changeSummary) {
     const sorted = [...changeSummary].sort((a, b) => (effectOrder[a.effect] ?? 1) - (effectOrder[b.effect] ?? 1));
     let md = '### WHAT\'S GOOD AND BAD IN THIS PR\n\n';
     for (const item of sorted) {
-        const emoji = item.effect === 'positive' ? '✅' : '⚠️';
+        const emoji = item.effect === 'positive' ? '✅'
+            : item.severity === 'critical' ? '⛔' : '⚠️';
         const tag = changeItemTag(item);
         const categoryPrefix = tag ? `**${tag}** — ` : '';
         const change = sanitizeInlineText(item.change);
@@ -1911,7 +1917,8 @@ function formatRevertSection(changeSummary) {
         if (first.revertDetail) {
             const d = first.revertDetail;
             const lineRef = d.startLine === d.endLine ? `${d.startLine}` : `${d.startLine}-${d.endLine}`;
-            const fixLabel = `Suggested fix ${g + 1}`;
+            const hasCriticalInGroup = group.some(item => item.severity === 'critical');
+            const fixLabel = hasCriticalInGroup ? `Fix ${g + 1}` : `Suggested fix ${g + 1}`;
             if (group.length === 1) {
                 // Single item — render as before
                 md += `**${fixLabel}: ${sanitizeInlineText(first.revert)}** *(line ${lineRef})*\n\n`;
@@ -1945,7 +1952,7 @@ function formatRevertSection(changeSummary) {
             }
         }
         else {
-            const simpleLabel = `Suggested fix ${g + 1}`;
+            const simpleLabel = first.severity === 'critical' ? `Fix ${g + 1}` : `Suggested fix ${g + 1}`;
             md += `**${simpleLabel}: ${sanitizeInlineText(first.revert)}**\n\n`;
         }
     }

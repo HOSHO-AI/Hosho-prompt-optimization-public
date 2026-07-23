@@ -346,6 +346,9 @@ function formatTable(
 function formatVerdict(changeSummary?: ChangeItem[]): string {
   if (!changeSummary || changeSummary.length === 0) return '**Verdict:** ✅ Approve This PR\n\n';
 
+  const hasCritical = changeSummary.some(c => c.effect === 'negative' && c.severity === 'critical');
+  if (hasCritical) return '**Verdict:** ⛔ Request Changes\n\n';
+
   const hasSuggestions = changeSummary.some(c => c.effect === 'negative');
   if (hasSuggestions) return '**Verdict:** ✅ Approve — with suggestions\n\n';
 
@@ -402,7 +405,8 @@ function formatWhatChanged(changeSummary?: ChangeItem[]): string {
 
   let md = '### WHAT\'S GOOD AND BAD IN THIS PR\n\n';
   for (const item of sorted) {
-    const emoji = item.effect === 'positive' ? '✅' : '⚠️';
+    const emoji = item.effect === 'positive' ? '✅'
+      : item.severity === 'critical' ? '⛔' : '⚠️';
     const tag = changeItemTag(item);
     const categoryPrefix = tag ? `**${tag}** — ` : '';
     const change = sanitizeInlineText(item.change);
@@ -458,7 +462,8 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
     if (first.revertDetail) {
       const d = first.revertDetail;
       const lineRef = d.startLine === d.endLine ? `${d.startLine}` : `${d.startLine}-${d.endLine}`;
-      const fixLabel = `Suggested fix ${g + 1}`;
+      const hasCriticalInGroup = group.some(item => item.severity === 'critical');
+      const fixLabel = hasCriticalInGroup ? `Fix ${g + 1}` : `Suggested fix ${g + 1}`;
 
       if (group.length === 1) {
         // Single item — render as before
@@ -494,7 +499,7 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
         md += `**Suggested fix:**\n\n${rewriteFence}\n${bestRewrite}\n${rewriteFence}\n\n`;
       }
     } else {
-      const simpleLabel = `Suggested fix ${g + 1}`;
+      const simpleLabel = first.severity === 'critical' ? `Fix ${g + 1}` : `Suggested fix ${g + 1}`;
       md += `**${simpleLabel}: ${sanitizeInlineText(first.revert!)}**\n\n`;
     }
   }
