@@ -205,24 +205,20 @@ describe('formatPRComment', () => {
     expect(result).toContain('**Verdict:** ✅ Approve This PR');
   });
 
-  it('renders a negative item as APPROVE with suggestions — severity no longer forks the verdict', () => {
-    // Backward-compat: this item still carries a legacy `severity: 'critical'` (as an old
-    // API response would). It must be ignored — the verdict never says "Request Changes".
+  it('shows REJECT verdict when changeSummary has critical negative items', () => {
     const comp = createMockComparison({
       changeSummary: [
         { change: 'Removed Section 4 rules', impact: 'lost rules', effect: 'negative', severity: 'critical', revert: 'Restore Section 4' },
       ],
     });
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
-    expect(result).toContain('**Verdict:** ✅ Approve — with suggestions');
-    expect(result).not.toContain('Request Changes');
-    expect(result).not.toContain('⛔');
+    expect(result).toContain('**Verdict:** ⛔ Request Changes');
   });
 
-  it('shows APPROVE with suggestions when changeSummary has only negative items', () => {
+  it('shows APPROVE with suggestions when changeSummary has only suggestion-severity negatives', () => {
     const comp = createMockComparison({
       changeSummary: [
-        { change: 'Uses negative framing', impact: 'style issue', effect: 'negative', revert: 'Rewrite as positive' },
+        { change: 'Uses negative framing', impact: 'style issue', effect: 'negative', severity: 'suggestion', revert: 'Rewrite as positive' },
       ],
     });
     const result = formatPRComment([comp], 42, 'test-org/test-repo');
