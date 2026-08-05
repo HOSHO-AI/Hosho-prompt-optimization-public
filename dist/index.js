@@ -1303,7 +1303,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             after: assembledAfter,
             before: assembledBefore,
             segments: segments.length > 1 ? segments : undefined,
-            // Deterministic per-file model from models.yaml, if it matched; else undefined ⇒ the Lambda
+            // Deterministic per-file model from models.md, if it matched; else undefined ⇒ the Lambda
             // falls back to its own inference exactly as before.
             targetModelFamily: resolvedModel?.family,
             modelClass: resolvedModel?.modelClass,
@@ -1523,72 +1523,98 @@ run();
 
 "use strict";
 
-// Deterministic per-prompt model resolution from a customer-maintained `.github/hosho/models.yaml`.
+// Deterministic per-prompt model resolution from a customer-maintained `.github/hosho/models.md`.
 //
-// Why: today, in CI, a prompt's target model is INFERRED — the Lambda hands the whole
-// architecture prose doc to Haiku and asks it to fuzzy-match each changed path to a "- Model: …"
-// line. That drifts (a real incident: a prompt reviewed as the wrong provider because the prose
-// lagged the code), collides (every agent's file is `system-prompt.md`), and silently degrades to
-// "model-fit N/A" on any failure. A customer file that maps path globs → {family, class} makes it
-// exact: no LLM, no fuzzy matching, no silent drop.
+// Why: today, in CI, a prompt's target model is INFERRED — the Lambda hands the whole architecture
+// prose doc to Haiku and asks it to fuzzy-match each changed path to a "- Model: …" line. That
+// drifts (a real incident: a prompt reviewed as the wrong provider because the prose lagged the
+// code), collides (every agent's file is `system-prompt.md`), and silently degrades to "model-fit
+// N/A" on any failure. A customer file that maps path globs → {family, class} makes it exact: no
+// LLM, no fuzzy matching, no silent drop.
 //
-// Format is a flat YAML map (valid YAML; parsed here without a yaml dependency, matching the repo's
-// hand-rolled assembly-config parser). Each entry is  "<path-glob>": <family>[/<class>] :
+// The file is a MARKDOWN doc (same `.md` convention as the customer's architecture doc, e.g.
+// Kite_prompt_chain.md) with a table Hosho reads EXACTLY — never fed to an LLM. Each data row is
+// `| <path-glob> | <family>[/<class>] |`:
 //
-//   # .github/hosho/models.yaml
-//   "backend/app/llm/orchestrator_agent/**": openai/reasoning
-//   "backend/app/llm/brand_analyzer_agent/**": gemini
-//   "**/*prompt*.md": gemini            # catch-all
+//   # Models — which model each prompt runs on
+//   | Prompt path (glob)   | Model            |
+//   | -------------------- | ---------------- |
+//   | `agents/router/**`   | openai/reasoning |
+//   | `agents/**`          | claude           |
+//   | `**/*prompt*.md`     | gemini            |
 //
 // Most-specific match wins (the rule with the longest literal, non-wildcard prefix), so order in
 // the file doesn't matter. family must be one of the seven the scorer knows; class defaults to
-// standard. Anything malformed is skipped with a warning, never throws — a bad models.yaml
-// degrades to today's inference, it never fails the run.
+// standard. Anything malformed is skipped with a warning, never throws — a bad file degrades to
+// today's inference, it never fails the run. Any path the table doesn't cover falls through to that
+// inference too, so the table is a pure overlay.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.MODEL_FAMILIES = void 0;
 exports.parseModelsConfig = parseModelsConfig;
 exports.resolveModel = resolveModel;
 const minimatch_1 = __nccwpck_require__(6507);
 exports.MODEL_FAMILIES = ['claude', 'openai', 'gemini', 'deepseek', 'qwen', 'kimi', 'glm'];
-function stripComment(line) {
-    // Drop a trailing `# comment`, but not a `#` inside quotes (globs don't use #, so this is safe).
-    const hash = line.indexOf('#');
-    return hash === -1 ? line : line.slice(0, hash);
+function stripComment(text) {
+    // Drop a trailing `# comment`. Globs and family names never contain `#`, so this is safe.
+    const hash = text.indexOf('#');
+    return hash === -1 ? text : text.slice(0, hash);
 }
 function isFamily(v) {
     return exports.MODEL_FAMILIES.includes(v);
 }
+/** Split one markdown-table row into trimmed cells, dropping the outer pipes. */
+function tableCells(line) {
+    let s = line.trim();
+    if (s.startsWith('|'))
+        s = s.slice(1);
+    if (s.endsWith('|'))
+        s = s.slice(0, -1);
+    return s.split('|').map((c) => c.trim());
+}
+/** A markdown separator row: every cell is dashes with optional alignment colons (`| --- | :--: |`). */
+function isSeparatorRow(cells) {
+    return cells.length > 0 && cells.every((c) => /^:?-{1,}:?$/.test(c));
+}
 /**
- * Parse the file's text into rules. Never throws — malformed lines are collected into `warnings`
- * and skipped, so a typo can't break the whole review.
+ * Parse the file's markdown table into rules. Never throws — malformed rows are collected into
+ * `warnings` and skipped, so a typo can't break the whole review. Prose, headings and HTML comments
+ * (any line without a `|`) are ignored; the first table row is treated as the header and skipped, as
+ * are `| --- |` separator rows.
  */
 function parseModelsConfig(raw) {
     const rules = [];
     const warnings = [];
+    let headerSkipped = false;
     for (const rawLine of raw.split('\n')) {
-        const line = stripComment(rawLine).trim();
-        if (!line)
-            continue;
-        if (/^version\s*:/.test(line) || /^defaults\s*:/.test(line) || /^models\s*:/.test(line))
-            continue; // headers, ignored
-        // "<glob>": family[/class]   — the glob may be quoted (recommended) or bare.
-        const m = line.match(/^["']?(.+?)["']?\s*:\s*([A-Za-z]+)(?:\s*\/\s*([A-Za-z]+))?\s*$/);
-        if (!m) {
-            warnings.push(`ignored unparseable line: ${rawLine.trim()}`);
+        const line = rawLine.trim();
+        if (!line || !line.includes('|'))
+            continue; // prose / headings / <!-- comments --> — ignored
+        const cells = tableCells(line);
+        if (isSeparatorRow(cells))
+            continue; // | --- | --- |
+        if (!headerSkipped) {
+            headerSkipped = true; // the first table row is the header (`| Prompt path | Model |`)
             continue;
         }
-        const [, glob, familyRaw, classRaw] = m;
-        const family = familyRaw.toLowerCase();
+        // col 0 = path glob (may be wrapped in backticks or quotes); col 1 = family[/class].
+        const glob = cells[0]?.replace(/^[`'"]+|[`'"]+$/g, '').trim() ?? '';
+        const modelCell = cells.length > 1 ? stripComment(cells[1]).trim() : '';
+        const m = modelCell.match(/^([A-Za-z]+)(?:\s*\/\s*([A-Za-z]+))?$/);
+        if (!glob || !m) {
+            warnings.push(`ignored malformed table row: ${rawLine.trim()}`);
+            continue;
+        }
+        const family = m[1].toLowerCase();
         if (!isFamily(family)) {
-            warnings.push(`ignored unknown model family "${familyRaw}" for ${glob} (known: ${exports.MODEL_FAMILIES.join(', ')})`);
+            warnings.push(`ignored unknown model family "${m[1]}" for ${glob} (known: ${exports.MODEL_FAMILIES.join(', ')})`);
             continue;
         }
-        const cls = (classRaw ?? 'standard').toLowerCase();
+        const cls = (m[2] ?? 'standard').toLowerCase();
         if (cls !== 'standard' && cls !== 'reasoning') {
-            warnings.push(`ignored unknown class "${classRaw}" for ${glob} (use reasoning|standard)`);
+            warnings.push(`ignored unknown class "${m[2]}" for ${glob} (use reasoning|standard)`);
             continue;
         }
-        rules.push({ glob: glob.trim(), family, modelClass: cls });
+        rules.push({ glob, family, modelClass: cls });
     }
     return { rules, warnings };
 }
