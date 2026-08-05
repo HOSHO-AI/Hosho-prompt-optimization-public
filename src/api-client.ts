@@ -20,6 +20,10 @@ export interface ReviewAPIRequest {
     after: string;
     before: string | null;
     segments?: Segment[];
+    // Per-file model, resolved deterministically from .github/hosho/models.yaml (models-config.ts).
+    // When set, the Lambda honors it over its own Haiku inference (explicit > detected).
+    targetModelFamily?: string;
+    modelClass?: 'standard' | 'reasoning';
   }>;
   metadata?: { repository?: string; prNumber?: number; prTitle?: string; prDescription?: string; prFileSummary?: string };
 }
