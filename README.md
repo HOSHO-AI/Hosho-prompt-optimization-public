@@ -121,6 +121,7 @@ jobs:
           file_pattern: '**/*system-prompt*.md'
           prompt_file: ${{ github.event.inputs.prompt_file || '' }}
           pr_number: ${{ steps.pr_details.outputs.pr_number || '' }}
+          models_config: .github/hosho/models.md          # which model each prompt runs on — see docs/models-config.md
           # system_overview: docs/system-overview.md       # Optional — see step 4
           # custom_principles: docs/prompt-principles.md   # Optional — see step 5
 ```
