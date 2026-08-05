@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { basename } from 'path';
 import { readFileSync } from 'fs';
+import { parseModelsConfig, resolveModel, type ModelRule } from './models-config';
 import { createTwoFilesPatch } from 'diff';
 import { identifyChangedPromptFiles } from './file-identifier';
 import {
@@ -69,6 +70,7 @@ async function run(): Promise<void> {
       .filter(Boolean);
     const bundleSiblings = core.getInput('bundle_siblings').trim().toLowerCase() === 'true';
     const assemblyConfigPath = core.getInput('assembly_config');
+    const modelsConfigPath = core.getInput('models_config');
 
     // Mask the API key in logs
     core.setSecret(apiKey);
@@ -114,6 +116,20 @@ async function run(): Promise<void> {
       }
     }
 
+    // Model config (deterministic per-prompt family/class, replacing Haiku inference in CI).
+    let modelRules: ModelRule[] = [];
+    if (modelsConfigPath) {
+      try {
+        const parsed = parseModelsConfig(readFileSync(modelsConfigPath, 'utf-8'));
+        modelRules = parsed.rules;
+        core.info(`Loaded model config from ${modelsConfigPath} (${modelRules.length} rule(s))`);
+        for (const w of parsed.warnings) core.warning(`models config: ${w}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        core.warning(`Model config not found at ${modelsConfigPath}: ${message}. Continuing with model inference.`);
+      }
+    }
+
     // Determine mode
     const eventName = github.context.eventName;
     const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target' || !!prNumberInput;
@@ -133,7 +149,7 @@ async function run(): Promise<void> {
           'or prompt_path for directory prefix matching (e.g. "prompts/").'
         );
       }
-      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig);
+      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig, modelRules);
     } else {
       await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
     }
@@ -158,6 +174,7 @@ async function runPRMode(
   skillsDirs: string[] = [],
   bundleSiblings: boolean = false,
   assemblyConfig: AssemblyConfig = EMPTY_ASSEMBLY_CONFIG,
+  modelRules: ModelRule[] = [],
 ): Promise<void> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -308,6 +325,7 @@ async function runPRMode(
     const knownSections = new Set<string>([...fileBundled.skills, ...fileBundled.siblings, ...injectedRefs]);
     const segments = buildSegmentManifest(assembledAfter, change.filename, knownSections, sourcePaths);
 
+    const resolvedModel = modelRules.length ? resolveModel(change.filename, modelRules) : null;
     apiFiles.push({
       path: change.filename,
       name: basename(change.filename),
@@ -315,6 +333,10 @@ async function runPRMode(
       after: assembledAfter,
       before: assembledBefore,
       segments: segments.length > 1 ? segments : undefined,
+      // Deterministic per-file model from models.yaml, if it matched; else undefined ⇒ the Lambda
+      // falls back to its own inference exactly as before.
+      targetModelFamily: resolvedModel?.family,
+      modelClass: resolvedModel?.modelClass,
     });
   }
 

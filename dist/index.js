@@ -1027,6 +1027,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const path_1 = __nccwpck_require__(6928);
 const fs_1 = __nccwpck_require__(9896);
+const models_config_1 = __nccwpck_require__(6056);
 const diff_1 = __nccwpck_require__(5508);
 const file_identifier_1 = __nccwpck_require__(1569);
 const file_fetcher_1 = __nccwpck_require__(5215);
@@ -1082,6 +1083,7 @@ async function run() {
             .filter(Boolean);
         const bundleSiblings = core.getInput('bundle_siblings').trim().toLowerCase() === 'true';
         const assemblyConfigPath = core.getInput('assembly_config');
+        const modelsConfigPath = core.getInput('models_config');
         // Mask the API key in logs
         core.setSecret(apiKey);
         // Read system overview file if provided
@@ -1126,6 +1128,21 @@ async function run() {
                 core.warning(`Assembly config not found at ${assemblyConfigPath}: ${message}. Continuing without it.`);
             }
         }
+        // Model config (deterministic per-prompt family/class, replacing Haiku inference in CI).
+        let modelRules = [];
+        if (modelsConfigPath) {
+            try {
+                const parsed = (0, models_config_1.parseModelsConfig)((0, fs_1.readFileSync)(modelsConfigPath, 'utf-8'));
+                modelRules = parsed.rules;
+                core.info(`Loaded model config from ${modelsConfigPath} (${modelRules.length} rule(s))`);
+                for (const w of parsed.warnings)
+                    core.warning(`models config: ${w}`);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                core.warning(`Model config not found at ${modelsConfigPath}: ${message}. Continuing with model inference.`);
+            }
+        }
         // Determine mode
         const eventName = github.context.eventName;
         const isPRMode = eventName === 'pull_request' || eventName === 'pull_request_target' || !!prNumberInput;
@@ -1140,7 +1157,7 @@ async function run() {
                     'Use file_pattern for glob matching (e.g. "**/*system-prompt*.md") ' +
                     'or prompt_path for directory prefix matching (e.g. "prompts/").');
             }
-            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig);
+            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig, modelRules);
         }
         else {
             await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
@@ -1152,7 +1169,7 @@ async function run() {
     }
 }
 // ---- PR Mode ----
-async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode = 'review', skillsDirs = [], bundleSiblings = false, assemblyConfig = file_fetcher_1.EMPTY_ASSEMBLY_CONFIG) {
+async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode = 'review', skillsDirs = [], bundleSiblings = false, assemblyConfig = file_fetcher_1.EMPTY_ASSEMBLY_CONFIG, modelRules = []) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
         throw new Error('GITHUB_TOKEN environment variable is required for PR mode');
@@ -1278,6 +1295,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         // actually bundled become segments. Only sent when something was bundled.
         const knownSections = new Set([...fileBundled.skills, ...fileBundled.siblings, ...injectedRefs]);
         const segments = (0, file_fetcher_1.buildSegmentManifest)(assembledAfter, change.filename, knownSections, sourcePaths);
+        const resolvedModel = modelRules.length ? (0, models_config_1.resolveModel)(change.filename, modelRules) : null;
         apiFiles.push({
             path: change.filename,
             name: (0, path_1.basename)(change.filename),
@@ -1285,6 +1303,10 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             after: assembledAfter,
             before: assembledBefore,
             segments: segments.length > 1 ? segments : undefined,
+            // Deterministic per-file model from models.yaml, if it matched; else undefined ⇒ the Lambda
+            // falls back to its own inference exactly as before.
+            targetModelFamily: resolvedModel?.family,
+            modelClass: resolvedModel?.modelClass,
         });
     }
     // Step 3: Call Lambda API (one file at a time to avoid connection timeout on large PRs)
@@ -1493,6 +1515,104 @@ async function postOrUpdatePRComment(octokit, owner, repo, pullNumber, body) {
 // Run
 run();
 //# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ 6056:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Deterministic per-prompt model resolution from a customer-maintained `.github/hosho/models.yaml`.
+//
+// Why: today, in CI, a prompt's target model is INFERRED — the Lambda hands the whole
+// architecture prose doc to Haiku and asks it to fuzzy-match each changed path to a "- Model: …"
+// line. That drifts (a real incident: a prompt reviewed as the wrong provider because the prose
+// lagged the code), collides (every agent's file is `system-prompt.md`), and silently degrades to
+// "model-fit N/A" on any failure. A customer file that maps path globs → {family, class} makes it
+// exact: no LLM, no fuzzy matching, no silent drop.
+//
+// Format is a flat YAML map (valid YAML; parsed here without a yaml dependency, matching the repo's
+// hand-rolled assembly-config parser). Each entry is  "<path-glob>": <family>[/<class>] :
+//
+//   # .github/hosho/models.yaml
+//   "backend/app/llm/orchestrator_agent/**": openai/reasoning
+//   "backend/app/llm/brand_analyzer_agent/**": gemini
+//   "**/*prompt*.md": gemini            # catch-all
+//
+// Most-specific match wins (the rule with the longest literal, non-wildcard prefix), so order in
+// the file doesn't matter. family must be one of the seven the scorer knows; class defaults to
+// standard. Anything malformed is skipped with a warning, never throws — a bad models.yaml
+// degrades to today's inference, it never fails the run.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MODEL_FAMILIES = void 0;
+exports.parseModelsConfig = parseModelsConfig;
+exports.resolveModel = resolveModel;
+const minimatch_1 = __nccwpck_require__(6507);
+exports.MODEL_FAMILIES = ['claude', 'openai', 'gemini', 'deepseek', 'qwen', 'kimi', 'glm'];
+function stripComment(line) {
+    // Drop a trailing `# comment`, but not a `#` inside quotes (globs don't use #, so this is safe).
+    const hash = line.indexOf('#');
+    return hash === -1 ? line : line.slice(0, hash);
+}
+function isFamily(v) {
+    return exports.MODEL_FAMILIES.includes(v);
+}
+/**
+ * Parse the file's text into rules. Never throws — malformed lines are collected into `warnings`
+ * and skipped, so a typo can't break the whole review.
+ */
+function parseModelsConfig(raw) {
+    const rules = [];
+    const warnings = [];
+    for (const rawLine of raw.split('\n')) {
+        const line = stripComment(rawLine).trim();
+        if (!line)
+            continue;
+        if (/^version\s*:/.test(line) || /^defaults\s*:/.test(line) || /^models\s*:/.test(line))
+            continue; // headers, ignored
+        // "<glob>": family[/class]   — the glob may be quoted (recommended) or bare.
+        const m = line.match(/^["']?(.+?)["']?\s*:\s*([A-Za-z]+)(?:\s*\/\s*([A-Za-z]+))?\s*$/);
+        if (!m) {
+            warnings.push(`ignored unparseable line: ${rawLine.trim()}`);
+            continue;
+        }
+        const [, glob, familyRaw, classRaw] = m;
+        const family = familyRaw.toLowerCase();
+        if (!isFamily(family)) {
+            warnings.push(`ignored unknown model family "${familyRaw}" for ${glob} (known: ${exports.MODEL_FAMILIES.join(', ')})`);
+            continue;
+        }
+        const cls = (classRaw ?? 'standard').toLowerCase();
+        if (cls !== 'standard' && cls !== 'reasoning') {
+            warnings.push(`ignored unknown class "${classRaw}" for ${glob} (use reasoning|standard)`);
+            continue;
+        }
+        rules.push({ glob: glob.trim(), family, modelClass: cls });
+    }
+    return { rules, warnings };
+}
+/** Length of a glob's leading literal (up to the first wildcard) — the specificity tiebreak. */
+function literalPrefixLen(glob) {
+    const i = glob.search(/[*?[\]{}]/);
+    return i === -1 ? glob.length : i;
+}
+/** Resolve one path against the rules; most-specific (longest literal prefix) match wins, or null. */
+function resolveModel(path, rules) {
+    let best = null;
+    let bestLen = -1;
+    for (const rule of rules) {
+        if (!(0, minimatch_1.minimatch)(path, rule.glob, { dot: true }))
+            continue;
+        const len = literalPrefixLen(rule.glob);
+        if (len > bestLen) {
+            best = rule;
+            bestLen = len;
+        }
+    }
+    return best ? { family: best.family, modelClass: best.modelClass } : null;
+}
+//# sourceMappingURL=models-config.js.map
 
 /***/ }),
 
