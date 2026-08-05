@@ -333,7 +333,7 @@ async function runPRMode(
       after: assembledAfter,
       before: assembledBefore,
       segments: segments.length > 1 ? segments : undefined,
-      // Deterministic per-file model from models.yaml, if it matched; else undefined ⇒ the Lambda
+      // Deterministic per-file model from models.md, if it matched; else undefined ⇒ the Lambda
       // falls back to its own inference exactly as before.
       targetModelFamily: resolvedModel?.family,
       modelClass: resolvedModel?.modelClass,

@@ -51,7 +51,7 @@ inputs:
     required: false
     default: ''
   models_config:
-    description: 'Path to a models manifest (e.g. .github/hosho/models.yaml) mapping prompt-path globs to the model each runs on ("<glob>": family[/class]). Makes model-fit scoring DETERMINISTIC — the family/class is read, not inferred by an LLM from a prose doc. Most-specific glob wins; unmatched paths fall back to inference. Optional. See docs/models-config.md.'
+    description: 'Path to a models doc (e.g. .github/hosho/models.md) — a markdown table mapping prompt-path globs to the model each runs on (| glob | family[/class] |). Makes model-fit scoring DETERMINISTIC — the family/class is read, not inferred by an LLM from a prose doc. Most-specific glob wins; unmatched paths fall back to inference. Optional. See docs/models-config.md.'
     required: false
     default: ''
   pr_number:
