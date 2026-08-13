@@ -57,6 +57,10 @@ inputs:
     description: 'Path to a minimal YAML exception-list (e.g. .github/hosho/assembly.yml) declaring abnormal shared references to inject when a prompt references them (inject_when_referenced) and/or references a prompt must contain (require_reference). For shared docs that are not backtick skill tokens (e.g. docs/rules/agent-security.md). Optional.'
     required: false
     default: ''
+  models_config:
+    description: 'Path to a models doc (e.g. .github/hosho/models.md) — a markdown table mapping prompt-path globs to the model each runs on (| glob | family[/class] |). Makes model-fit scoring DETERMINISTIC — the family/class is read, not inferred by an LLM from a prose doc. Most-specific glob wins; unmatched paths fall back to inference. Optional. See docs/models-config.md.'
+    required: false
+    default: ''
   pr_number:
     description: 'PR number (required when triggered via issue_comment slash command)'
     required: false
