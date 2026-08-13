@@ -19,6 +19,7 @@ import {
   BOT_MARKER,
 } from './output-formatter';
 import { ComparisonResult, ChangeItem } from './types';
+import { parseSections, partitionByHash } from './review-state';
 
 /**
  * Strip boilerplate from custom principles file: HTML comments and # headings.
@@ -133,7 +134,10 @@ async function run(): Promise<void> {
           'or prompt_path for directory prefix matching (e.g. "prompts/").'
         );
       }
-      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig);
+      // A slash command is an explicit human ask for a fresh look, so it always bypasses the
+      // content-hash skip.
+      const dedupe = core.getInput('dedupe') !== 'false' && eventName !== 'issue_comment';
+      await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig, dedupe);
     } else {
       await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
     }
@@ -158,6 +162,7 @@ async function runPRMode(
   skillsDirs: string[] = [],
   bundleSiblings: boolean = false,
   assemblyConfig: AssemblyConfig = EMPTY_ASSEMBLY_CONFIG,
+  dedupe: boolean = true,
 ): Promise<void> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -318,13 +323,47 @@ async function runPRMode(
     });
   }
 
+  // Step 2b: CONTENT-HASH DEDUPE. `synchronize` re-fires on every push and GitHub applies the
+  // workflow `paths` filter to the PR's whole diff, so a PR that once touched a prompt re-reviews
+  // every prompt file on every later push — measured at 17.8x amplification on appsmith-v2
+  // (1,688 billed reviews for 30 real prompt changes in a week). Everything needed to stop that is
+  // already in hand here: apiFiles carries the ASSEMBLED before/after read from local git, at no
+  // API cost. Skip files whose content pair is unchanged since the last review.
+  //
+  // FAIL OPEN: no prior comment, unparseable state, or dedupe disabled ⇒ review everything.
+  const priorBody = dedupe ? await findExistingCommentBody(octokit, owner, repo, pullNumber) : undefined;
+  const carriedSections = parseSections(priorBody);
+  const { changed, unchanged, hashes } = partitionByHash(apiFiles, carriedSections, !dedupe);
+
+  if (dedupe && changed.length === 0 && unchanged.length > 0) {
+    // Every file is byte-identical to what we already reviewed. Leave the existing comment
+    // completely untouched — not even rewritten, so GitHub does not mark it edited and the
+    // reviewer sees the same current review. The skip is invisible and the run is a SUCCESS.
+    core.info(
+      `No prompt content changed since the last review (${unchanged.length} file(s) unchanged). ` +
+      `Skipping — existing review comment left as-is.`
+    );
+    core.summary.addRaw(
+      `### Hosho: no re-review needed\n\n${unchanged.length} prompt file(s) unchanged since the ` +
+      `last review; no API calls made.\n`
+    );
+    await core.summary.write();
+    return;
+  }
+  if (dedupe && unchanged.length > 0) {
+    core.info(
+      `Dedupe: ${changed.length} changed, ${unchanged.length} unchanged (carried forward): ` +
+      unchanged.map(f => f.name).join(', ')
+    );
+  }
+
   // Step 3: Call Lambda API (one file at a time to avoid connection timeout on large PRs)
-  core.info(`Reviewing ${apiFiles.length} file(s)...`);
+  core.info(`Reviewing ${changed.length} file(s)...`);
   const allResults: ReviewFileResult[] = [];
   const errors: string[] = [];
 
-  for (const file of apiFiles) {
-    core.info(`  → ${file.name} (${allResults.length + 1}/${apiFiles.length})...`);
+  for (const file of changed) {
+    core.info(`  → ${file.name} (${allResults.length + 1}/${changed.length})...`);
     try {
       const resp = await callReviewAPI(apiUrl, {
         apiKey,
@@ -381,14 +420,14 @@ async function runPRMode(
   }
 
   if (allResults.length === 0) {
-    throw new Error(`All ${apiFiles.length} file(s) failed: ${errors.join('; ')}`);
+    throw new Error(`All ${changed.length} file(s) failed: ${errors.join('; ')}`);
   }
 
   if (errors.length > 0) {
-    core.warning(`${errors.length}/${apiFiles.length} file(s) failed: ${errors.join('; ')}`);
+    core.warning(`${errors.length}/${changed.length} file(s) failed: ${errors.join('; ')}`);
   }
 
-  core.info(`Received ${allResults.length}/${apiFiles.length} evaluation(s).`);
+  core.info(`Received ${allResults.length}/${changed.length} evaluation(s).`);
 
   // Step 4: Map API results to ComparisonResult[]
   const comparisons: ComparisonResult[] = allResults.map(r => ({
@@ -426,9 +465,16 @@ async function runPRMode(
   // Step 5: Post PR comment
   const repoFullName = `${owner}/${repo}`;
   core.info(`Posting PR ${outputMode === 'review' ? 'review' : 'improve'} comment...`);
+  // Carry: the FULL ordered file list (so the scope header stays truthful) plus the previously
+  // rendered markdown for files skipped this run, so a partial re-review never drops sections.
+  const carry = {
+    order: apiFiles.map(f => f.path),
+    carried: carriedSections,
+    hashes,
+  };
   const commentBody = outputMode === 'review'
-    ? formatReviewComment(comparisons, pullNumber, repoFullName, bundledByFile)
-    : formatPRComment(comparisons, pullNumber, repoFullName, bundledByFile);
+    ? formatReviewComment(comparisons, pullNumber, repoFullName, bundledByFile, carry)
+    : formatPRComment(comparisons, pullNumber, repoFullName, bundledByFile, carry);
   await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
 
   // Step 6: Write Job Summary
@@ -539,6 +585,30 @@ async function updateWorkflowRunName(
 }
 
 // ---- Shared Helpers ----
+
+/**
+ * The body of our existing bot comment on this PR, or undefined.
+ *
+ * This is the dedupe state store: the comment we already read and update on every run, so no new
+ * infrastructure is needed. Never throws — a lookup failure must fail OPEN (review everything)
+ * rather than skip a review we owe the customer.
+ */
+async function findExistingCommentBody(
+  octokit: ReturnType<typeof github.getOctokit>,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+): Promise<string | undefined> {
+  try {
+    const comments = await octokit.paginate(octokit.rest.issues.listComments, {
+      owner, repo, issue_number: pullNumber, per_page: 100,
+    });
+    return comments.find((c) => c.body?.includes(BOT_MARKER))?.body ?? undefined;
+  } catch (e) {
+    core.warning(`Could not read prior review comment (${e instanceof Error ? e.message : e}); reviewing all files.`);
+    return undefined;
+  }
+}
 
 async function postOrUpdatePRComment(
   octokit: ReturnType<typeof github.getOctokit>,

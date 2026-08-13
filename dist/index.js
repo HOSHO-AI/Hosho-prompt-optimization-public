@@ -1032,6 +1032,7 @@ const file_identifier_1 = __nccwpck_require__(1569);
 const file_fetcher_1 = __nccwpck_require__(5215);
 const api_client_1 = __nccwpck_require__(4427);
 const output_formatter_1 = __nccwpck_require__(1061);
+const review_state_1 = __nccwpck_require__(2279);
 /**
  * Strip boilerplate from custom principles file: HTML comments and # headings.
  * Returns empty string if only boilerplate remains.
@@ -1140,7 +1141,10 @@ async function run() {
                     'Use file_pattern for glob matching (e.g. "**/*system-prompt*.md") ' +
                     'or prompt_path for directory prefix matching (e.g. "prompts/").');
             }
-            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig);
+            // A slash command is an explicit human ask for a fresh look, so it always bypasses the
+            // content-hash skip.
+            const dedupe = core.getInput('dedupe') !== 'false' && eventName !== 'issue_comment';
+            await runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode, skillsDirs, bundleSiblings, assemblyConfig, dedupe);
         }
         else {
             await runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeoutMs);
@@ -1152,7 +1156,7 @@ async function run() {
     }
 }
 // ---- PR Mode ----
-async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode = 'review', skillsDirs = [], bundleSiblings = false, assemblyConfig = file_fetcher_1.EMPTY_ASSEMBLY_CONFIG) {
+async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview, customPrinciples, timeoutMs, prNumberInput, outputMode = 'review', skillsDirs = [], bundleSiblings = false, assemblyConfig = file_fetcher_1.EMPTY_ASSEMBLY_CONFIG, dedupe = true) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
         throw new Error('GITHUB_TOKEN environment variable is required for PR mode');
@@ -1287,12 +1291,38 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             segments: segments.length > 1 ? segments : undefined,
         });
     }
+    // Step 2b: CONTENT-HASH DEDUPE. `synchronize` re-fires on every push and GitHub applies the
+    // workflow `paths` filter to the PR's whole diff, so a PR that once touched a prompt re-reviews
+    // every prompt file on every later push — measured at 17.8x amplification on appsmith-v2
+    // (1,688 billed reviews for 30 real prompt changes in a week). Everything needed to stop that is
+    // already in hand here: apiFiles carries the ASSEMBLED before/after read from local git, at no
+    // API cost. Skip files whose content pair is unchanged since the last review.
+    //
+    // FAIL OPEN: no prior comment, unparseable state, or dedupe disabled ⇒ review everything.
+    const priorBody = dedupe ? await findExistingCommentBody(octokit, owner, repo, pullNumber) : undefined;
+    const carriedSections = (0, review_state_1.parseSections)(priorBody);
+    const { changed, unchanged, hashes } = (0, review_state_1.partitionByHash)(apiFiles, carriedSections, !dedupe);
+    if (dedupe && changed.length === 0 && unchanged.length > 0) {
+        // Every file is byte-identical to what we already reviewed. Leave the existing comment
+        // completely untouched — not even rewritten, so GitHub does not mark it edited and the
+        // reviewer sees the same current review. The skip is invisible and the run is a SUCCESS.
+        core.info(`No prompt content changed since the last review (${unchanged.length} file(s) unchanged). ` +
+            `Skipping — existing review comment left as-is.`);
+        core.summary.addRaw(`### Hosho: no re-review needed\n\n${unchanged.length} prompt file(s) unchanged since the ` +
+            `last review; no API calls made.\n`);
+        await core.summary.write();
+        return;
+    }
+    if (dedupe && unchanged.length > 0) {
+        core.info(`Dedupe: ${changed.length} changed, ${unchanged.length} unchanged (carried forward): ` +
+            unchanged.map(f => f.name).join(', '));
+    }
     // Step 3: Call Lambda API (one file at a time to avoid connection timeout on large PRs)
-    core.info(`Reviewing ${apiFiles.length} file(s)...`);
+    core.info(`Reviewing ${changed.length} file(s)...`);
     const allResults = [];
     const errors = [];
-    for (const file of apiFiles) {
-        core.info(`  → ${file.name} (${allResults.length + 1}/${apiFiles.length})...`);
+    for (const file of changed) {
+        core.info(`  → ${file.name} (${allResults.length + 1}/${changed.length})...`);
         try {
             const resp = await (0, api_client_1.callReviewAPI)(apiUrl, {
                 apiKey,
@@ -1348,12 +1378,12 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         result.changeSummary = [...(result.changeSummary ?? []), ...items];
     }
     if (allResults.length === 0) {
-        throw new Error(`All ${apiFiles.length} file(s) failed: ${errors.join('; ')}`);
+        throw new Error(`All ${changed.length} file(s) failed: ${errors.join('; ')}`);
     }
     if (errors.length > 0) {
-        core.warning(`${errors.length}/${apiFiles.length} file(s) failed: ${errors.join('; ')}`);
+        core.warning(`${errors.length}/${changed.length} file(s) failed: ${errors.join('; ')}`);
     }
-    core.info(`Received ${allResults.length}/${apiFiles.length} evaluation(s).`);
+    core.info(`Received ${allResults.length}/${changed.length} evaluation(s).`);
     // Step 4: Map API results to ComparisonResult[]
     const comparisons = allResults.map(r => ({
         ...r.comparison,
@@ -1390,9 +1420,16 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     // Step 5: Post PR comment
     const repoFullName = `${owner}/${repo}`;
     core.info(`Posting PR ${outputMode === 'review' ? 'review' : 'improve'} comment...`);
+    // Carry: the FULL ordered file list (so the scope header stays truthful) plus the previously
+    // rendered markdown for files skipped this run, so a partial re-review never drops sections.
+    const carry = {
+        order: apiFiles.map(f => f.path),
+        carried: carriedSections,
+        hashes,
+    };
     const commentBody = outputMode === 'review'
-        ? (0, output_formatter_1.formatReviewComment)(comparisons, pullNumber, repoFullName, bundledByFile)
-        : (0, output_formatter_1.formatPRComment)(comparisons, pullNumber, repoFullName, bundledByFile);
+        ? (0, output_formatter_1.formatReviewComment)(comparisons, pullNumber, repoFullName, bundledByFile, carry)
+        : (0, output_formatter_1.formatPRComment)(comparisons, pullNumber, repoFullName, bundledByFile, carry);
     await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
     // Step 6: Write Job Summary
     core.info('Writing Job Summary...');
@@ -1476,6 +1513,25 @@ async function updateWorkflowRunName(promptNames, prNumber) {
     }
 }
 // ---- Shared Helpers ----
+/**
+ * The body of our existing bot comment on this PR, or undefined.
+ *
+ * This is the dedupe state store: the comment we already read and update on every run, so no new
+ * infrastructure is needed. Never throws — a lookup failure must fail OPEN (review everything)
+ * rather than skip a review we owe the customer.
+ */
+async function findExistingCommentBody(octokit, owner, repo, pullNumber) {
+    try {
+        const comments = await octokit.paginate(octokit.rest.issues.listComments, {
+            owner, repo, issue_number: pullNumber, per_page: 100,
+        });
+        return comments.find((c) => c.body?.includes(output_formatter_1.BOT_MARKER))?.body ?? undefined;
+    }
+    catch (e) {
+        core.warning(`Could not read prior review comment (${e instanceof Error ? e.message : e}); reviewing all files.`);
+        return undefined;
+    }
+}
 async function postOrUpdatePRComment(octokit, owner, repo, pullNumber, body) {
     const comments = await octokit.paginate(octokit.rest.issues.listComments, {
         owner, repo, issue_number: pullNumber, per_page: 100,
@@ -1497,7 +1553,7 @@ run();
 /***/ }),
 
 /***/ 1061:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -1509,6 +1565,7 @@ exports.formatPRComment = formatPRComment;
 exports.formatJobSummary = formatJobSummary;
 exports.formatReviewComment = formatReviewComment;
 exports.formatReviewJobSummary = formatReviewJobSummary;
+const review_state_1 = __nccwpck_require__(2279);
 const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
 exports.BOT_MARKER = BOT_MARKER;
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
@@ -1690,9 +1747,12 @@ function formatHeader(filename, _description, _targetModelFamily, _targetModelNa
     let md = `${title}\n\n`;
     return md;
 }
-function formatScopeHeader(comparisons, prNumber, repoFullName) {
-    const fileCount = comparisons.length;
-    const fileList = comparisons.map(c => `\`${c.promptFile}\``).join(', ');
+function formatScopeHeader(comparisons, prNumber, repoFullName, carry) {
+    // On a partial (deduped) run only the CHANGED files have fresh comparisons, but the comment still
+    // shows every file — so the header counts `carry.order`, not the fresh set.
+    const paths = carry?.order ?? comparisons.map(c => c.promptFile);
+    const fileCount = paths.length;
+    const fileList = paths.map(pth => `\`${pth}\``).join(', ');
     let md = `## Hosho PR Review: ${repoFullName}#${prNumber}\n\n`;
     if (fileCount === 1) {
         const summary = comparisons[0].scopeSummary;
@@ -2129,15 +2189,44 @@ function formatBundledFooter(bundledByFile) {
     }
     return `\n<sub>Bundled review context:\n${lines.join('\n')}</sub>\n`;
 }
-function formatPRComment(comparisons, prNumber, repoFullName = '', bundledByFile) {
-    let md = `${BOT_MARKER}\n`;
-    md += formatScopeHeader(comparisons, prNumber, repoFullName);
-    const isMultiFile = comparisons.length > 1;
-    for (const comp of comparisons) {
-        md += formatPRFileSection(comp, prNumber, isMultiFile);
+/**
+ * Assemble the per-file body of a PR comment, wrapping each section in the dedupe delimiters.
+ *
+ * The delimiters do double duty (see src/review-state.ts): they carry the content hash so the next
+ * run can skip unchanged files, AND they let this run splice in the previously-rendered markdown of
+ * files it did not re-review, so a partial run never looks like content was lost.
+ */
+function assembleSections(comparisons, prNumber, render, carry) {
+    const fresh = new Map(comparisons.map(c => [c.promptFile, c]));
+    const order = carry?.order ?? comparisons.map(c => c.promptFile);
+    const isMultiFile = order.length > 1;
+    let md = '';
+    for (const path of order) {
+        const comp = fresh.get(path);
+        const carried = carry?.carried.get(path);
+        let section;
+        let sha;
+        if (comp) {
+            section = render(comp, prNumber, isMultiFile);
+            sha = carry?.hashes.get(path);
+        }
+        else if (carried) {
+            section = carried.markdown;
+            sha = carried.sha;
+        }
+        else {
+            continue; // neither fresh nor carried — nothing to show for this path
+        }
+        md += sha ? (0, review_state_1.wrapSection)(path, sha, section) : section;
         if (isMultiFile)
             md += `\n---\n\n`;
     }
+    return md;
+}
+function formatPRComment(comparisons, prNumber, repoFullName = '', bundledByFile, carry) {
+    let md = `${BOT_MARKER}\n`;
+    md += formatScopeHeader(comparisons, prNumber, repoFullName, carry);
+    md += assembleSections(comparisons, prNumber, formatPRFileSection, carry);
     // Truncate if needed
     if (md.length > PR_COMMENT_MAX_LENGTH) {
         md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
@@ -2171,15 +2260,10 @@ function formatReviewFileSection(comp, prNumber, isMultiFile) {
     md += formatRevertSection(comp.changeSummary);
     return md;
 }
-function formatReviewComment(comparisons, prNumber, repoFullName = '', bundledByFile) {
+function formatReviewComment(comparisons, prNumber, repoFullName = '', bundledByFile, carry) {
     let md = `${BOT_MARKER}\n`;
-    md += formatScopeHeader(comparisons, prNumber, repoFullName);
-    const isMultiFile = comparisons.length > 1;
-    for (const comp of comparisons) {
-        md += formatReviewFileSection(comp, prNumber, isMultiFile);
-        if (isMultiFile)
-            md += `\n---\n\n`;
-    }
+    md += formatScopeHeader(comparisons, prNumber, repoFullName, carry);
+    md += assembleSections(comparisons, prNumber, formatReviewFileSection, carry);
     if (md.length > PR_COMMENT_MAX_LENGTH) {
         md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
         md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
@@ -2204,6 +2288,108 @@ function formatReviewJobSummary(comparisons, prNumber, repoFullName = '', bundle
     return md;
 }
 //# sourceMappingURL=output-formatter.js.map
+
+/***/ }),
+
+/***/ 2279:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.fileHash = fileHash;
+exports.wrapSection = wrapSection;
+exports.parseSections = parseSections;
+exports.partitionByHash = partitionByHash;
+/**
+ * Content-hash dedupe state, carried inside the bot's own PR comment.
+ *
+ * WHY: `pull_request: synchronize` re-fires on every push, and GitHub evaluates the workflow's
+ * `paths` filter against the PR's WHOLE diff rather than the push — so once a PR touches one prompt
+ * file, every later push re-reviews every prompt file the PR ever touched, at full price. Measured
+ * on appsmithorg/appsmith-v2 over 8 days: 30 real prompt changes landed on main, 1,688 reviews were
+ * billed (17.8x amplification); PR #15717 alone was reviewed 265 times for 53 genuine content
+ * states. Replaying the git history of the three heaviest PRs shows a content hash removes ~85%.
+ *
+ * DESIGN: the delimiters ARE the state. Each file's rendered section in the comment is wrapped in
+ * `<!-- hosho-file "path" <sha> -->` … `<!-- /hosho-file -->`, which does two jobs at once:
+ *   1. the sha lets the next run skip files whose content is unchanged;
+ *   2. the captured markdown lets a PARTIAL run (1 of 9 files changed) re-render only that file and
+ *      carry the other eight forward verbatim — nothing disappears from the comment.
+ * A separate state blob was rejected: the live comment on PR #15717 is 65,986 chars, already at
+ * GitHub's 65,536 limit and being truncated, so there is no room to duplicate results.
+ *
+ * FAIL OPEN, ALWAYS. Missing, malformed or truncation-damaged state means "review everything". The
+ * only acceptable failure direction is spending money we did not need to — never withholding a
+ * review the customer should have had.
+ */
+const crypto_1 = __nccwpck_require__(6982);
+const OPEN_RE = /<!--\s*hosho-file\s+"([^"]+)"\s+([a-f0-9]{64})\s*-->/g;
+const CLOSE = '<!-- /hosho-file -->';
+/**
+ * The dedupe key for one file: the exact pair of strings we would send to the API.
+ *
+ * Hashes the ASSEMBLED content (post skills/siblings bundling), so a changed skill still
+ * re-reviews the prompts that pull it in. Hashes BOTH sides, because `before` is the content at the
+ * merge base — if main advances and someone else edits the same prompt, the diff genuinely changed.
+ * Content rather than commit sha, so it survives rebases and force-pushes that change nothing.
+ */
+function fileHash(before, after) {
+    return (0, crypto_1.createHash)('sha256')
+        .update(before ?? '')
+        .update('\0')
+        .update(after)
+        .digest('hex');
+}
+/** Wrap a rendered section so the next run can both skip it and carry it forward. */
+function wrapSection(path, sha, markdown) {
+    return `<!-- hosho-file "${path}" ${sha} -->\n${markdown}${CLOSE}\n`;
+}
+/**
+ * Recover per-file sections from a previous comment body.
+ *
+ * Deliberately tolerant: an unterminated section (the tail was truncated at the 65k limit) is
+ * DROPPED rather than half-recovered, so its file is treated as changed and re-reviewed. Any parse
+ * surprise yields fewer entries, never a wrong one.
+ */
+function parseSections(body) {
+    const out = new Map();
+    if (!body)
+        return out;
+    OPEN_RE.lastIndex = 0;
+    let m;
+    while ((m = OPEN_RE.exec(body)) !== null) {
+        const [openTag, path, sha] = m;
+        const start = m.index + openTag.length;
+        const end = body.indexOf(CLOSE, start);
+        if (end === -1)
+            continue; // truncated tail — treat as absent
+        out.set(path, { sha, markdown: body.slice(start, end).replace(/^\n/, '') });
+    }
+    return out;
+}
+/**
+ * Split candidate files by whether their content hash matches the carried state.
+ *
+ * `force` (the `/hosho-review` slash command, or `dedupe: false`) sends everything to `changed`.
+ * A file with no carried section is always `changed` — first run reviews everything.
+ */
+function partitionByHash(files, carried, force = false) {
+    const changed = [];
+    const unchanged = [];
+    const hashes = new Map();
+    for (const f of files) {
+        const h = fileHash(f.before, f.after);
+        hashes.set(f.path, h);
+        const prior = carried.get(f.path);
+        if (!force && prior && prior.sha === h)
+            unchanged.push(f);
+        else
+            changed.push(f);
+    }
+    return { changed, unchanged, hashes };
+}
+//# sourceMappingURL=review-state.js.map
 
 /***/ }),
 
