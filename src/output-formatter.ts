@@ -1,3 +1,4 @@
+import { wrapSection } from './review-state';
 import {
   ComparisonResult,
   ChangeItem,
@@ -10,6 +11,20 @@ import {
 } from './types';
 
 const BOT_MARKER = '<!-- prompt-factor-reviewer-api -->';
+
+/**
+ * Carried-forward render state for the content-hash dedupe (see src/review-state.ts).
+ *
+ * `order` is every prompt file in the PR (reviewed this run or not) so the scope header stays
+ * truthful on a partial run; `carried` holds the previously-rendered markdown for files that were
+ * skipped, so nothing disappears from the comment when only one of nine files changed.
+ * Absent ⇒ pre-dedupe behaviour, byte-identical apart from the invisible section delimiters.
+ */
+export interface SectionCarry {
+  order: string[];
+  carried: Map<string, { sha: string; markdown: string }>;
+  hashes: Map<string, string>;
+}
 const PR_COMMENT_MAX_LENGTH = 65000; // Leave buffer below 65536 limit
 
 // ---- v3 taxonomy (4 macros / 13 sub-factors) — display labels + routing ----
@@ -212,9 +227,13 @@ function formatScopeHeader(
   comparisons: ComparisonResult[],
   prNumber: number,
   repoFullName: string,
+  carry?: SectionCarry,
 ): string {
-  const fileCount = comparisons.length;
-  const fileList = comparisons.map(c => `\`${c.promptFile}\``).join(', ');
+  // On a partial (deduped) run only the CHANGED files have fresh comparisons, but the comment still
+  // shows every file — so the header counts `carry.order`, not the fresh set.
+  const paths = carry?.order ?? comparisons.map(c => c.promptFile);
+  const fileCount = paths.length;
+  const fileList = paths.map(pth => `\`${pth}\``).join(', ');
 
   let md = `## Hosho PR Review: ${repoFullName}#${prNumber}\n\n`;
 
@@ -723,20 +742,54 @@ export function formatBundledFooter(
   return `\n<sub>Bundled review context:\n${lines.join('\n')}</sub>\n`;
 }
 
+
+/**
+ * Assemble the per-file body of a PR comment, wrapping each section in the dedupe delimiters.
+ *
+ * The delimiters do double duty (see src/review-state.ts): they carry the content hash so the next
+ * run can skip unchanged files, AND they let this run splice in the previously-rendered markdown of
+ * files it did not re-review, so a partial run never looks like content was lost.
+ */
+function assembleSections(
+  comparisons: ComparisonResult[],
+  prNumber: number,
+  render: (c: ComparisonResult, prNumber: number, isMultiFile: boolean) => string,
+  carry?: SectionCarry,
+): string {
+  const fresh = new Map(comparisons.map(c => [c.promptFile, c]));
+  const order = carry?.order ?? comparisons.map(c => c.promptFile);
+  const isMultiFile = order.length > 1;
+  let md = '';
+  for (const path of order) {
+    const comp = fresh.get(path);
+    const carried = carry?.carried.get(path);
+    let section: string;
+    let sha: string | undefined;
+    if (comp) {
+      section = render(comp, prNumber, isMultiFile);
+      sha = carry?.hashes.get(path);
+    } else if (carried) {
+      section = carried.markdown;
+      sha = carried.sha;
+    } else {
+      continue; // neither fresh nor carried — nothing to show for this path
+    }
+    md += sha ? wrapSection(path, sha, section) : section;
+    if (isMultiFile) md += `\n---\n\n`;
+  }
+  return md;
+}
+
 export function formatPRComment(
   comparisons: ComparisonResult[],
   prNumber: number,
   repoFullName: string = '',
   bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
+  carry?: SectionCarry,
 ): string {
   let md = `${BOT_MARKER}\n`;
-  md += formatScopeHeader(comparisons, prNumber, repoFullName);
-
-  const isMultiFile = comparisons.length > 1;
-  for (const comp of comparisons) {
-    md += formatPRFileSection(comp, prNumber, isMultiFile);
-    if (isMultiFile) md += `\n---\n\n`;
-  }
+  md += formatScopeHeader(comparisons, prNumber, repoFullName, carry);
+  md += assembleSections(comparisons, prNumber, formatPRFileSection, carry);
 
   // Truncate if needed
   if (md.length > PR_COMMENT_MAX_LENGTH) {
@@ -791,15 +844,11 @@ export function formatReviewComment(
   prNumber: number,
   repoFullName: string = '',
   bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
+  carry?: SectionCarry,
 ): string {
   let md = `${BOT_MARKER}\n`;
-  md += formatScopeHeader(comparisons, prNumber, repoFullName);
-
-  const isMultiFile = comparisons.length > 1;
-  for (const comp of comparisons) {
-    md += formatReviewFileSection(comp, prNumber, isMultiFile);
-    if (isMultiFile) md += `\n---\n\n`;
-  }
+  md += formatScopeHeader(comparisons, prNumber, repoFullName, carry);
+  md += assembleSections(comparisons, prNumber, formatReviewFileSection, carry);
 
   if (md.length > PR_COMMENT_MAX_LENGTH) {
     md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
