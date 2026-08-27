@@ -238,7 +238,12 @@ function formatScopeHeader(
   let md = `## Hosho PR Review: ${repoFullName}#${prNumber}\n\n`;
 
   if (fileCount === 1) {
-    const summary = comparisons[0].scopeSummary;
+    // `fileCount` counts carry.order (every file in the PR), which is NOT the same set as
+    // `comparisons` (only the files freshly reviewed this run). They diverge whenever a file is
+    // carried forward or its review failed, so this must not assume a fresh comparison exists —
+    // today an all-failed run throws upstream before reaching here, and depending on that is exactly
+    // the kind of coincidence that turns into a crash when the upstream guard moves.
+    const summary = comparisons[0]?.scopeSummary;
     md += summary
       ? `**Scope:** ${summary} in ${fileList}\n\n`
       : `**Scope:** 1 prompt change in ${fileList}\n\n`;

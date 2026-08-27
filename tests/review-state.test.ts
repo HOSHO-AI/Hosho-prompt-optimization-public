@@ -314,3 +314,44 @@ describe('a comment that overflows GitHub stays complete where it counts', () =>
     expect(parseStateBlock(next).get(droppedPath)).toBe(hashes.get(droppedPath));
   });
 });
+
+describe("a review that did not complete is never recorded as done", () => {
+  // THE HARD CONSTRAINT: "do not narrow scope — never suppress a desired review."
+  // A hash in the state block asserts "we reviewed this exact content". Writing one for a file whose
+  // API call errored makes every future push skip it, and the comment claims it is unchanged since a
+  // review that never happened. The failure is silent, permanent (until someone edits the file), and
+  // costs the customer quality rather than costing us money — the one direction that is not allowed.
+  it("omits a failed file from the state, so the next push re-reviews it", () => {
+    const paths = ["p/ok-prompt.md", "p/failed-prompt.md"];
+    const allHashes = new Map([[paths[0], "a".repeat(64)], [paths[1], "b".repeat(64)]]);
+
+    // What the action now builds: the full hash map MINUS the paths that did not complete.
+    const stateHashes = new Map(allHashes);
+    stateHashes.delete(paths[1]);
+
+    const body = formatPRComment([], 42, "org/repo", undefined, {
+      order: paths, carried: new Map(), hashes: stateHashes,
+    });
+
+    const state = parseStateBlock(body);
+    expect(state.has(paths[0])).toBe(true);
+    expect(state.has(paths[1])).toBe(false);          // …so it is CHANGED next run
+    expect(partitionByHash(
+      [{ path: paths[1], before: "x", after: "y" }],
+      state,
+    ).changed).toHaveLength(1);
+  });
+
+  it("does not render a failed file as 'unchanged since the last review'", () => {
+    // The placeholder is for a file we DID review whose verdict was truncated away. Applying it to a
+    // file we never reviewed states something false to the customer in their own PR.
+    const body = formatPRComment([], 42, "org/repo", undefined, {
+      order: ["p/failed-prompt.md"], carried: new Map(), hashes: new Map(),
+    });
+    // The scope header still names the file — the PR genuinely changes it, and saying so is honest.
+    // What must NOT appear is a rendered section claiming a verdict we never produced.
+    expect(body).not.toContain("Unchanged since the last review");
+    expect(parseSections(body).size).toBe(0);
+    expect(parseStateBlock(body).size).toBe(0);
+  });
+});

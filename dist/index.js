@@ -1092,6 +1092,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.diffSnippetBudget = diffSnippetBudget;
 const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const path_1 = __nccwpck_require__(6928);
@@ -1119,9 +1120,39 @@ function stripPrinciplesBoilerplate(raw) {
         .trim();
 }
 /**
- * Compute a compact diff snippet showing only +/- lines, truncated.
+ * The whole comment's budget for diff snippets, shared across every file in the run.
+ *
+ * MEASURED on the live comment for appsmith-v2 PR #17312 (66,679 B, 11 files, truncated): the
+ * ```diff blocks were 23,177 B — 35% of the entire body, and the single largest component. A
+ * 15-LINE cap was already in place and did not bind, because prompt diffs are a few very long lines
+ * (~140 chars each), not many short ones. So the cap has to be in BYTES.
+ *
+ * Snippets are the right thing to cut first: they are a courtesy preview of a change the reader can
+ * see in full, with better rendering, one click away in the PR's own Files tab. Everything else in
+ * the comment (verdict, what-changed, suggested edits) exists nowhere else.
  */
-function computeDiffSnippet(before, after, maxLines = 15) {
+const DIFF_SNIPPET_TOTAL_BUDGET = 10_000;
+const DIFF_SNIPPET_MIN = 400;
+const DIFF_SNIPPET_MAX = 1_500;
+/**
+ * Per-file byte budget, so the TOTAL stays bounded however many prompt files a PR touches.
+ *
+ * Returns 0 — no snippet at all — once the share would fall below DIFF_SNIPPET_MIN. A floor plus a
+ * per-file allocation cannot both hold at high file counts (60 files x a 400 B floor is 24 KB, more
+ * than twice the whole budget), and of the two, dropping the snippet is the honest resolution:
+ * under ~400 bytes a "diff snippet" is a fragment that shows the reader nothing they could act on,
+ * while the PR's own Files tab shows the change in full, one click away.
+ */
+function diffSnippetBudget(fileCount) {
+    const share = Math.floor(DIFF_SNIPPET_TOTAL_BUDGET / Math.max(1, fileCount));
+    if (share < DIFF_SNIPPET_MIN)
+        return 0;
+    return Math.min(DIFF_SNIPPET_MAX, share);
+}
+/**
+ * Compute a compact diff snippet showing only +/- lines, truncated by BOTH line count and bytes.
+ */
+function computeDiffSnippet(before, after, maxLines = 15, maxChars = DIFF_SNIPPET_MAX) {
     if (!before)
         return '';
     const patch = (0, diff_1.createTwoFilesPatch)('before', 'after', before, after, '', '', { context: 0 });
@@ -1131,10 +1162,21 @@ function computeDiffSnippet(before, after, maxLines = 15) {
         .filter(l => !l.startsWith('+++') && !l.startsWith('---'));
     if (diffLines.length === 0)
         return '';
-    const truncated = diffLines.slice(0, maxLines);
-    let result = truncated.join('\n');
-    if (diffLines.length > maxLines)
-        result += `\n... (${diffLines.length - maxLines} more lines)`;
+    // Take whole lines until the byte budget is spent — never split a line mid-way, which would show
+    // the reader a fragment that reads as the actual content of the change.
+    const kept = [];
+    let used = 0;
+    for (const line of diffLines.slice(0, maxLines)) {
+        if (kept.length > 0 && used + line.length + 1 > maxChars)
+            break;
+        kept.push(line);
+        used += line.length + 1;
+    }
+    const omitted = diffLines.length - kept.length;
+    let result = kept.join('\n');
+    if (omitted > 0) {
+        result += `\n... (${omitted} more changed line${omitted === 1 ? '' : 's'} — see the Files tab)`;
+    }
     return result;
 }
 async function run() {
@@ -1435,6 +1477,11 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     core.info(`Reviewing ${changed.length} file(s)...`);
     const allResults = [];
     const errors = [];
+    // Paths whose review did not complete this run. They must NOT be stamped into the dedupe state:
+    // a hash in the state block means "we reviewed this content and here is the verdict", and writing
+    // one for a file we never reviewed makes every future push SKIP it — silently withholding a review
+    // the customer should have had, which is the one thing this whole change set must never do.
+    const failedPaths = new Set();
     for (const file of changed) {
         core.info(`  → ${file.name} (${allResults.length + 1}/${changed.length})...`);
         try {
@@ -1453,6 +1500,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             }, timeoutMs);
             if (resp.status !== 'success' || !resp.results) {
                 errors.push(`${file.name}: ${resp.message || 'Unknown API error'}`);
+                failedPaths.add(file.path);
                 core.warning(`API error for ${file.name}: ${resp.message || 'Unknown error'}. Skipping.`);
                 continue;
             }
@@ -1465,6 +1513,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             errors.push(`${file.name}: ${msg}`);
+            failedPaths.add(file.path);
             core.warning(`Failed to review ${file.name}: ${msg}. Skipping.`);
         }
     }
@@ -1511,11 +1560,14 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         customPrinciplesResult: r.customPrinciplesResult,
         macroScores: r.macroScores,
     }));
-    // Attach diff snippets and scopeSummary to comparisons
+    // Attach diff snippets and scopeSummary to comparisons. The snippet budget is shared across every
+    // file the COMMENT will render (carried ones included), not just the ones reviewed this run —
+    // otherwise a partial re-review of a wide PR would hand its one fresh file the whole budget.
+    const snippetBudget = diffSnippetBudget(apiFiles.length);
     for (const comp of comparisons) {
         const file = apiFiles.find(f => f.path === comp.promptFile);
-        if (file && file.before) {
-            comp.diffSnippet = computeDiffSnippet(file.before, file.after);
+        if (file && file.before && snippetBudget > 0) {
+            comp.diffSnippet = computeDiffSnippet(file.before, file.after, 15, snippetBudget);
         }
         const result = allResults.find(r => r.file === comp.promptFile);
         if (result?.scopeSummary) {
@@ -1540,10 +1592,16 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     core.info(`Posting PR ${outputMode === 'review' ? 'review' : 'improve'} comment...`);
     // Carry: the FULL ordered file list (so the scope header stays truthful) plus the previously
     // rendered markdown for files skipped this run, so a partial re-review never drops sections.
+    // FAIL OPEN on anything that did not complete: a path with no hash is re-reviewed next push.
+    // Without this, a file whose API call errored is rendered as "unchanged since the last review"
+    // AND stamped at its current content hash, so it is never reviewed again until someone edits it.
+    const stateHashes = new Map(hashes);
+    for (const path of failedPaths)
+        stateHashes.delete(path);
     const carry = {
         order: apiFiles.map(f => f.path),
         carried: carriedSections,
-        hashes,
+        hashes: stateHashes,
     };
     const commentBody = outputMode === 'review'
         ? (0, output_formatter_1.formatReviewComment)(comparisons, pullNumber, repoFullName, bundledByFile, carry)
@@ -2005,7 +2063,12 @@ function formatScopeHeader(comparisons, prNumber, repoFullName, carry) {
     const fileList = paths.map(pth => `\`${pth}\``).join(', ');
     let md = `## Hosho PR Review: ${repoFullName}#${prNumber}\n\n`;
     if (fileCount === 1) {
-        const summary = comparisons[0].scopeSummary;
+        // `fileCount` counts carry.order (every file in the PR), which is NOT the same set as
+        // `comparisons` (only the files freshly reviewed this run). They diverge whenever a file is
+        // carried forward or its review failed, so this must not assume a fresh comparison exists —
+        // today an all-failed run throws upstream before reaching here, and depending on that is exactly
+        // the kind of coincidence that turns into a crash when the upstream guard moves.
+        const summary = comparisons[0]?.scopeSummary;
         md += summary
             ? `**Scope:** ${summary} in ${fileList}\n\n`
             : `**Scope:** 1 prompt change in ${fileList}\n\n`;
