@@ -421,6 +421,10 @@ async function runPRMode(
         customPrinciples: customPrinciples || undefined,
         files: [file],
         metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber, prTitle, prDescription, prFileSummary: prFileSummary || undefined },
+        // Caller identity on every cost row. Without it the bot's spend lands with caller_kind
+        // null and cannot be told apart from an MCP agent's in the by-caller breakdowns — which is
+        // how "is this the bot or a customer's script?" became a week-long question in the first place.
+        telemetry: { callerKind: 'bot', clientName: 'hosho-action', clientVersion: ACTION_VERSION },
       }, timeoutMs);
 
       if (resp.status !== 'success' || !resp.results) {

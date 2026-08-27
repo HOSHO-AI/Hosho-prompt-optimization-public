@@ -26,6 +26,8 @@ export interface ReviewAPIRequest {
     modelClass?: 'standard' | 'reasoning';
   }>;
   metadata?: { repository?: string; prNumber?: number; prTitle?: string; prDescription?: string; prFileSummary?: string };
+  /** Caller identity stamped onto every cx.llm_costs row the request produces. */
+  telemetry?: { callerKind?: string; clientName?: string; clientVersion?: string; runKind?: string; branch?: string };
 }
 
 export interface ReviewFileResult {
