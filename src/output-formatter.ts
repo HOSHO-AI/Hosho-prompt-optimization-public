@@ -1,4 +1,4 @@
-import { wrapSection } from './review-state';
+import { wrapSection, renderStateBlock } from './review-state';
 import {
   ComparisonResult,
   ChangeItem,
@@ -238,7 +238,12 @@ function formatScopeHeader(
   let md = `## Hosho PR Review: ${repoFullName}#${prNumber}\n\n`;
 
   if (fileCount === 1) {
-    const summary = comparisons[0].scopeSummary;
+    // `fileCount` counts carry.order (every file in the PR), which is NOT the same set as
+    // `comparisons` (only the files freshly reviewed this run). They diverge whenever a file is
+    // carried forward or its review failed, so this must not assume a fresh comparison exists —
+    // today an all-failed run throws upstream before reaching here, and depending on that is exactly
+    // the kind of coincidence that turns into a crash when the upstream guard moves.
+    const summary = comparisons[0]?.scopeSummary;
     md += summary
       ? `**Scope:** ${summary} in ${fileList}\n\n`
       : `**Scope:** 1 prompt change in ${fileList}\n\n`;
@@ -750,16 +755,29 @@ export function formatBundledFooter(
  * run can skip unchanged files, AND they let this run splice in the previously-rendered markdown of
  * files it did not re-review, so a partial run never looks like content was lost.
  */
-function assembleSections(
+/** One rendered file section, kept discrete so truncation drops WHOLE sections (see composeComment). */
+interface BuiltSection { path: string; sha?: string; text: string; }
+
+/**
+ * The skip state for every section we BUILT — including any that truncation goes on to drop. That is
+ * the whole point: a file whose verdict did not fit must still not be re-reviewed for free next push.
+ */
+function stateFor(sections: BuiltSection[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const s of sections) if (s.sha) m.set(s.path, s.sha);
+  return m;
+}
+
+function buildSections(
   comparisons: ComparisonResult[],
   prNumber: number,
   render: (c: ComparisonResult, prNumber: number, isMultiFile: boolean) => string,
   carry?: SectionCarry,
-): string {
+): BuiltSection[] {
   const fresh = new Map(comparisons.map(c => [c.promptFile, c]));
   const order = carry?.order ?? comparisons.map(c => c.promptFile);
   const isMultiFile = order.length > 1;
-  let md = '';
+  const out: BuiltSection[] = [];
   for (const path of order) {
     const comp = fresh.get(path);
     const carried = carry?.carried.get(path);
@@ -771,13 +789,64 @@ function assembleSections(
     } else if (carried) {
       section = carried.markdown;
       sha = carried.sha;
+    } else if (carry?.hashes.has(path)) {
+      // Unchanged since the last review, but its rendered verdict is not recoverable — the previous
+      // comment was truncated before this section. Say so rather than dropping the file silently:
+      // the state block still carries its sha, so it is not re-billed, and the full text is in the
+      // Actions job summary. (Before the state block existed this file re-billed on every push
+      // forever, and STILL got truncated away — so this is strictly better on both axes.)
+      section = `### ${path}\n\n_Unchanged since the last review. The full verdict exceeded ` +
+        `GitHub's comment size limit — see the Job Summary in the Actions tab._\n\n`;
+      sha = carry.hashes.get(path);
     } else {
-      continue; // neither fresh nor carried — nothing to show for this path
+      continue; // neither fresh, carried, nor known — nothing to show for this path
     }
-    md += sha ? wrapSection(path, sha, section) : section;
-    if (isMultiFile) md += `\n---\n\n`;
+    const wrapped = sha ? wrapSection(path, sha, section) : section;
+    out.push({ path, sha, text: isMultiFile ? `${wrapped}\n---\n\n` : wrapped });
   }
-  return md;
+  return out;
+}
+
+/**
+ * Assemble the final comment body under GitHub's hard 65,536-char limit.
+ *
+ * Two defects this replaces, both measured live on appsmith PRs #17312 and #17467:
+ *
+ *  1. `md.substring(0, LIMIT - 200)` cut MID-SECTION, orphaning the tail file's `hosho-file` opener.
+ *     `parseSections` then dropped it (correctly — a half-recovered section is worse), so that file
+ *     re-billed a full review on every subsequent push and was truncated away again each time. A
+ *     permanent, self-renewing cost leak. Sections are now dropped WHOLE, from the tail.
+ *  2. The bundled footer and sign-off were appended AFTER truncation, so the body still exceeded the
+ *     limit — which is why both live comments measured 66-68 KB. The footer is now inside the budget.
+ *
+ * The skip state is rendered before any of this and is never subject to it.
+ */
+function composeComment(
+  header: string,
+  sections: BuiltSection[],
+  footer: string,
+  stateBlock: string,
+): string {
+  const head = `${BOT_MARKER}\n${stateBlock}${header}`;
+  const full = head + sections.map(s => s.text).join('') + footer;
+  if (full.length <= PR_COMMENT_MAX_LENGTH) return full;
+
+  const dropped: string[] = [];
+  const kept = [...sections];
+  let note = '';
+  const body = () => head + kept.map(s => s.text).join('') + note + footer;
+  while (kept.length > 0 && body().length > PR_COMMENT_MAX_LENGTH) {
+    dropped.unshift(kept.pop()!.path);
+    note =
+      `\n\n---\n\n**Comment truncated.** ${dropped.length} file(s) omitted here — ` +
+      `${dropped.join(', ')}. See the Job Summary in the Actions tab for the full detailed report.\n`;
+  }
+  // Backstop: header + footer alone could in principle exceed the budget (a PR bundling very many
+  // skills). A body over 65,536 is rejected by the API outright, so clamp rather than fail the run.
+  // This cut CAN orphan a section — which is now harmless, because the skip state lives at the top
+  // and is never what gets cut. That is precisely the property the state block was added for.
+  const out = body();
+  return out.length > PR_COMMENT_MAX_LENGTH ? out.slice(0, PR_COMMENT_MAX_LENGTH) : out;
 }
 
 export function formatPRComment(
@@ -787,19 +856,13 @@ export function formatPRComment(
   bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
   carry?: SectionCarry,
 ): string {
-  let md = `${BOT_MARKER}\n`;
-  md += formatScopeHeader(comparisons, prNumber, repoFullName, carry);
-  md += assembleSections(comparisons, prNumber, formatPRFileSection, carry);
-
-  // Truncate if needed
-  if (md.length > PR_COMMENT_MAX_LENGTH) {
-    md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
-    md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
-  }
-
-  md += formatBundledFooter(bundledByFile);
-  md += `\n*Hosho Bot*\n`;
-  return md;
+  const sections = buildSections(comparisons, prNumber, formatPRFileSection, carry);
+  return composeComment(
+    formatScopeHeader(comparisons, prNumber, repoFullName, carry),
+    sections,
+    `${formatBundledFooter(bundledByFile)}\n*Hosho Bot*\n`,
+    renderStateBlock(stateFor(sections)),
+  );
 }
 
 export function formatJobSummary(
@@ -846,19 +909,15 @@ export function formatReviewComment(
   bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
   carry?: SectionCarry,
 ): string {
-  let md = `${BOT_MARKER}\n`;
-  md += formatScopeHeader(comparisons, prNumber, repoFullName, carry);
-  md += assembleSections(comparisons, prNumber, formatReviewFileSection, carry);
-
-  if (md.length > PR_COMMENT_MAX_LENGTH) {
-    md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
-    md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
-  }
-
-  md += formatBundledFooter(bundledByFile);
-  md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
-  md += `*Hosho Bot*\n`;
-  return md;
+  const sections = buildSections(comparisons, prNumber, formatReviewFileSection, carry);
+  return composeComment(
+    formatScopeHeader(comparisons, prNumber, repoFullName, carry),
+    sections,
+    `${formatBundledFooter(bundledByFile)}` +
+      `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n` +
+      `*Hosho Bot*\n`,
+    renderStateBlock(stateFor(sections)),
+  );
 }
 
 export function formatReviewJobSummary(

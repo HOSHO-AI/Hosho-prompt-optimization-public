@@ -26,6 +26,8 @@ export interface ReviewAPIRequest {
     modelClass?: 'standard' | 'reasoning';
   }>;
   metadata?: { repository?: string; prNumber?: number; prTitle?: string; prDescription?: string; prFileSummary?: string };
+  /** Caller identity stamped onto every cx.llm_costs row the request produces. */
+  telemetry?: { callerKind?: string; clientName?: string; clientVersion?: string; runKind?: string; branch?: string };
 }
 
 export interface ReviewFileResult {
@@ -126,4 +128,48 @@ function isRetryableError(error: unknown): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Fire-and-forget PR-bot beacon: counts only, no LLM call, no cost, no content.
+ *
+ * WHY. The action calls the Lambda directly, so `mcp_usage_events` never sees it — and on a dedupe
+ * SKIP there is no request at all, so the reviews we AVOID leave no trace in any store. That means
+ * the single number that says whether the content-hash dedupe is working (suppression rate) could
+ * only be obtained by a hand census of GitHub Actions logs; it measured 42.4% on appsmith-v2.
+ *
+ * Deliberately fragile-by-design: 5-second timeout, every failure swallowed, never awaited in a way
+ * that can fail the run. A telemetry write must not be able to turn a customer's PR check red.
+ */
+export async function sendBotEvent(
+  apiUrl: string,
+  apiKey: string,
+  botEvent: {
+    repository: string;
+    prNumber?: number;
+    event?: string;
+    filesTotal: number;
+    filesReviewed: number;
+    filesSkipped: number;
+    actionVersion?: string;
+    skippedEntirely?: boolean;
+    commentBytes?: number;
+    stateEntries?: number;
+  }
+): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5_000);
+  try {
+    await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey, mode: 'pr', botEvent }),
+      signal: controller.signal,
+    });
+  } catch {
+    // Swallowed on purpose — see above. No core.warning either: a noisy telemetry failure in every
+    // customer's log is worse than a missing counter.
+  } finally {
+    clearTimeout(timer);
+  }
 }

@@ -9,8 +9,9 @@ import {
   fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, bundleSiblingsForPrompt,
   resolveSharedReferences, parseAssemblyConfig, buildSegmentManifest,
   AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, evaluateReferenceConvention,
+  resolveMergeBase,
 } from './file-fetcher';
-import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
+import { callReviewAPI, sendBotEvent, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
   formatPRComment,
   formatReviewComment,
@@ -20,7 +21,26 @@ import {
   BOT_MARKER,
 } from './output-formatter';
 import { ComparisonResult, ChangeItem } from './types';
-import { parseSections, partitionByHash } from './review-state';
+import { readPriorState, partitionByHash, parseStateBlock } from './review-state';
+
+// Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
+// inferred from behaviour. Bump on release alongside the git tag.
+const ACTION_VERSION = 'v1.45.0';
+
+/**
+ * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.
+ *
+ * `github.context.eventName` is only ever `pull_request` for the push path, which collapses
+ * `opened` and `synchronize` into one bucket — and the whole dedupe thesis is that `synchronize`
+ * re-fires on every push while GitHub applies the workflow's `paths` filter to the PR's WHOLE diff.
+ * Without the action, "is the dedupe holding on re-pushes?" is unanswerable from the stored data.
+ */
+function triggerName(): string {
+  const action = github.context.payload?.action;
+  return typeof action === 'string' && action
+    ? `${github.context.eventName}:${action}`
+    : github.context.eventName;
+}
 
 /**
  * Strip boilerplate from custom principles file: HTML comments and # headings.
@@ -36,9 +56,45 @@ function stripPrinciplesBoilerplate(raw: string): string {
 }
 
 /**
- * Compute a compact diff snippet showing only +/- lines, truncated.
+ * The whole comment's budget for diff snippets, shared across every file in the run.
+ *
+ * MEASURED on the live comment for appsmith-v2 PR #17312 (66,679 B, 11 files, truncated): the
+ * ```diff blocks were 23,177 B — 35% of the entire body, and the single largest component. A
+ * 15-LINE cap was already in place and did not bind, because prompt diffs are a few very long lines
+ * (~140 chars each), not many short ones. So the cap has to be in BYTES.
+ *
+ * Snippets are the right thing to cut first: they are a courtesy preview of a change the reader can
+ * see in full, with better rendering, one click away in the PR's own Files tab. Everything else in
+ * the comment (verdict, what-changed, suggested edits) exists nowhere else.
  */
-function computeDiffSnippet(before: string | null, after: string, maxLines = 15): string {
+const DIFF_SNIPPET_TOTAL_BUDGET = 10_000;
+const DIFF_SNIPPET_MIN = 400;
+const DIFF_SNIPPET_MAX = 1_500;
+
+/**
+ * Per-file byte budget, so the TOTAL stays bounded however many prompt files a PR touches.
+ *
+ * Returns 0 — no snippet at all — once the share would fall below DIFF_SNIPPET_MIN. A floor plus a
+ * per-file allocation cannot both hold at high file counts (60 files x a 400 B floor is 24 KB, more
+ * than twice the whole budget), and of the two, dropping the snippet is the honest resolution:
+ * under ~400 bytes a "diff snippet" is a fragment that shows the reader nothing they could act on,
+ * while the PR's own Files tab shows the change in full, one click away.
+ */
+export function diffSnippetBudget(fileCount: number): number {
+  const share = Math.floor(DIFF_SNIPPET_TOTAL_BUDGET / Math.max(1, fileCount));
+  if (share < DIFF_SNIPPET_MIN) return 0;
+  return Math.min(DIFF_SNIPPET_MAX, share);
+}
+
+/**
+ * Compute a compact diff snippet showing only +/- lines, truncated by BOTH line count and bytes.
+ */
+function computeDiffSnippet(
+  before: string | null,
+  after: string,
+  maxLines = 15,
+  maxChars = DIFF_SNIPPET_MAX,
+): string {
   if (!before) return '';
   const patch = createTwoFilesPatch('before', 'after', before, after, '', '', { context: 0 });
   const lines = patch.split('\n');
@@ -46,9 +102,21 @@ function computeDiffSnippet(before: string | null, after: string, maxLines = 15)
     .filter(l => l.startsWith('+') || l.startsWith('-'))
     .filter(l => !l.startsWith('+++') && !l.startsWith('---'));
   if (diffLines.length === 0) return '';
-  const truncated = diffLines.slice(0, maxLines);
-  let result = truncated.join('\n');
-  if (diffLines.length > maxLines) result += `\n... (${diffLines.length - maxLines} more lines)`;
+
+  // Take whole lines until the byte budget is spent — never split a line mid-way, which would show
+  // the reader a fragment that reads as the actual content of the change.
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of diffLines.slice(0, maxLines)) {
+    if (kept.length > 0 && used + line.length + 1 > maxChars) break;
+    kept.push(line);
+    used += line.length + 1;
+  }
+  const omitted = diffLines.length - kept.length;
+  let result = kept.join('\n');
+  if (omitted > 0) {
+    result += `\n... (${omitted} more changed line${omitted === 1 ? '' : 's'} — see the Files tab)`;
+  }
   return result;
 }
 
@@ -224,6 +292,18 @@ async function runPRMode(
     core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
   }
 
+  // The BEFORE side is read at the merge base, not the base-branch tip.
+  //
+  // GitHub's own file LIST (pulls.listFiles, below) is already three-dot — it reports what this PR
+  // changed relative to where it diverged. Reading before-side CONTENT at `pr.base.sha` made the two
+  // disagree: the list said "this PR changed 3 files", the content diff showed everything anyone
+  // else had landed on main since. That both re-billed the PR on other people's commits and could
+  // render a PR as reverting a change it never touched. Fails open to the base tip.
+  const contentBaseSha = resolveMergeBase(baseSha, headSha);
+  if (contentBaseSha !== baseSha) {
+    core.info(`Merge base: ${contentBaseSha.substring(0, 7)} (base tip is ${baseSha.substring(0, 7)})`);
+  }
+
   // Step 0.5: Gather full PR file summary for context (all files, not just prompts)
   let prFileSummary = '';
   let allPRFilenames: string[] = [];
@@ -267,11 +347,11 @@ async function runPRMode(
   const siblingPatterns = ['*prompt*.md', '*addendum*.md'];
 
   for (const change of changedFiles) {
-    const { before, after } = fetchFileVersions(change, baseSha, headSha);
+    const { before, after } = fetchFileVersions(change, contentBaseSha, headSha);
 
     // Resolve template variables — inject content from changed companion files
     let assembledAfter = resolveTemplateVariables(after, change.filename, headSha, allPRFilenames);
-    let assembledBefore = before ? resolveTemplateVariables(before, change.filename, baseSha, allPRFilenames) : null;
+    let assembledBefore = before ? resolveTemplateVariables(before, change.filename, contentBaseSha, allPRFilenames) : null;
 
     const fileBundled = { skills: [] as string[], siblings: [] as string[] };
     // Maps each bundled section's display name → resolved repo path, threaded
@@ -286,7 +366,7 @@ async function runPRMode(
       fileBundled.skills = r.bundled;
       Object.assign(sourcePaths, r.paths);
       if (assembledBefore !== null) {
-        assembledBefore = bundleSkillsForPrompt(assembledBefore, baseSha, skillsDirs).assembled;
+        assembledBefore = bundleSkillsForPrompt(assembledBefore, contentBaseSha, skillsDirs).assembled;
       }
     }
 
@@ -299,7 +379,7 @@ async function runPRMode(
       Object.assign(sourcePaths, r.paths);
       if (assembledBefore !== null) {
         const beforePath = (change.status === 'renamed' && change.previousFilename) ? change.previousFilename : change.filename;
-        assembledBefore = bundleSiblingsForPrompt(assembledBefore, beforePath, baseSha, siblingPatterns).assembled;
+        assembledBefore = bundleSiblingsForPrompt(assembledBefore, beforePath, contentBaseSha, siblingPatterns).assembled;
       }
     }
 
@@ -309,7 +389,7 @@ async function runPRMode(
     assembledAfter = refResult.assembled;
     const injectedRefs = refResult.injected;
     if (assembledBefore !== null) {
-      assembledBefore = resolveSharedReferences(assembledBefore, baseSha, assemblyConfig).assembled;
+      assembledBefore = resolveSharedReferences(assembledBefore, contentBaseSha, assemblyConfig).assembled;
     }
 
     // Convention check (WS-2) — run on the AUTHORED content (pre-injection). No LLM.
@@ -354,8 +434,10 @@ async function runPRMode(
   //
   // FAIL OPEN: no prior comment, unparseable state, or dedupe disabled ⇒ review everything.
   const priorBody = dedupe ? await findExistingCommentBody(octokit, owner, repo, pullNumber) : undefined;
-  const carriedSections = parseSections(priorBody);
-  const { changed, unchanged, hashes } = partitionByHash(apiFiles, carriedSections, !dedupe);
+  // Two roles, two stores: the top state block decides what may be SKIPPED (truncation-proof), the
+  // inline sections supply the markdown to CARRY FORWARD (truncatable, and handled as such below).
+  const { shas: priorShas, sections: carriedSections } = readPriorState(priorBody);
+  const { changed, unchanged, hashes } = partitionByHash(apiFiles, priorShas, !dedupe);
 
   if (dedupe && changed.length === 0 && unchanged.length > 0) {
     // Every file is byte-identical to what we already reviewed. Leave the existing comment
@@ -370,6 +452,13 @@ async function runPRMode(
       `last review; no API calls made.\n`
     );
     await core.summary.write();
+    // The whole point of the dedupe, and the only place it is observable: no review ran, so nothing
+    // else in any store will ever record that this push happened.
+    await sendBotEvent(apiUrl, apiKey, {
+      repository: `${owner}/${repo}`, prNumber: pullNumber, event: triggerName(),
+      filesTotal: apiFiles.length, filesReviewed: 0, filesSkipped: unchanged.length,
+      actionVersion: ACTION_VERSION, skippedEntirely: true,
+    });
     return;
   }
   if (dedupe && unchanged.length > 0) {
@@ -383,6 +472,11 @@ async function runPRMode(
   core.info(`Reviewing ${changed.length} file(s)...`);
   const allResults: ReviewFileResult[] = [];
   const errors: string[] = [];
+  // Paths whose review did not complete this run. They must NOT be stamped into the dedupe state:
+  // a hash in the state block means "we reviewed this content and here is the verdict", and writing
+  // one for a file we never reviewed makes every future push SKIP it — silently withholding a review
+  // the customer should have had, which is the one thing this whole change set must never do.
+  const failedPaths = new Set<string>();
 
   for (const file of changed) {
     core.info(`  → ${file.name} (${allResults.length + 1}/${changed.length})...`);
@@ -395,10 +489,15 @@ async function runPRMode(
         customPrinciples: customPrinciples || undefined,
         files: [file],
         metadata: { repository: `${owner}/${repo}`, prNumber: pullNumber, prTitle, prDescription, prFileSummary: prFileSummary || undefined },
+        // Caller identity on every cost row. Without it the bot's spend lands with caller_kind
+        // null and cannot be told apart from an MCP agent's in the by-caller breakdowns — which is
+        // how "is this the bot or a customer's script?" became a week-long question in the first place.
+        telemetry: { callerKind: 'bot', clientName: 'hosho-action', clientVersion: ACTION_VERSION },
       }, timeoutMs);
 
       if (resp.status !== 'success' || !resp.results) {
         errors.push(`${file.name}: ${resp.message || 'Unknown API error'}`);
+        failedPaths.add(file.path);
         core.warning(`API error for ${file.name}: ${resp.message || 'Unknown error'}. Skipping.`);
         continue;
       }
@@ -410,6 +509,7 @@ async function runPRMode(
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       errors.push(`${file.name}: ${msg}`);
+      failedPaths.add(file.path);
       core.warning(`Failed to review ${file.name}: ${msg}. Skipping.`);
     }
   }
@@ -461,11 +561,14 @@ async function runPRMode(
     macroScores: r.macroScores,
   }));
 
-  // Attach diff snippets and scopeSummary to comparisons
+  // Attach diff snippets and scopeSummary to comparisons. The snippet budget is shared across every
+  // file the COMMENT will render (carried ones included), not just the ones reviewed this run —
+  // otherwise a partial re-review of a wide PR would hand its one fresh file the whole budget.
+  const snippetBudget = diffSnippetBudget(apiFiles.length);
   for (const comp of comparisons) {
     const file = apiFiles.find(f => f.path === comp.promptFile);
-    if (file && file.before) {
-      comp.diffSnippet = computeDiffSnippet(file.before, file.after);
+    if (file && file.before && snippetBudget > 0) {
+      comp.diffSnippet = computeDiffSnippet(file.before, file.after, 15, snippetBudget);
     }
     const result = allResults.find(r => r.file === comp.promptFile);
     if (result?.scopeSummary) {
@@ -489,10 +592,15 @@ async function runPRMode(
   core.info(`Posting PR ${outputMode === 'review' ? 'review' : 'improve'} comment...`);
   // Carry: the FULL ordered file list (so the scope header stays truthful) plus the previously
   // rendered markdown for files skipped this run, so a partial re-review never drops sections.
+  // FAIL OPEN on anything that did not complete: a path with no hash is re-reviewed next push.
+  // Without this, a file whose API call errored is rendered as "unchanged since the last review"
+  // AND stamped at its current content hash, so it is never reviewed again until someone edits it.
+  const stateHashes = new Map(hashes);
+  for (const path of failedPaths) stateHashes.delete(path);
   const carry = {
     order: apiFiles.map(f => f.path),
     carried: carriedSections,
-    hashes,
+    hashes: stateHashes,
   };
   const commentBody = outputMode === 'review'
     ? formatReviewComment(comparisons, pullNumber, repoFullName, bundledByFile, carry)
@@ -510,6 +618,19 @@ async function runPRMode(
   const overallScores = comparisons.map((c) => c.synthesis.overallScore);
   core.setOutput('overall_score', overallScores.join(', '));
   core.setOutput('review_summary', comparisons.map((c) => c.synthesis.promptDescription).join(' | '));
+
+  // Counts for the run that just happened. `filesReviewed` also shows up in cx.llm_costs (it cost
+  // money); `filesSkipped` appears nowhere but here, and it is the number that says whether the
+  // content-hash dedupe is earning its keep.
+  await sendBotEvent(apiUrl, apiKey, {
+    repository: repoFullName, prNumber: pullNumber, event: triggerName(),
+    filesTotal: apiFiles.length, filesReviewed: changed.length, filesSkipped: unchanged.length,
+    actionVersion: ACTION_VERSION,
+    // Comment health. `stateEntries < filesTotal` means the comment truncated and a file lost its
+    // dedupe state — which then re-bills on every push, permanently. Measured on four live PRs.
+    commentBytes: commentBody.length,
+    stateEntries: parseStateBlock(commentBody).size,
+  });
 
   core.info('Done.');
 }

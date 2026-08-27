@@ -25,7 +25,9 @@ For every factor that isn't green, you get specific findings — what's missing,
 
 ### 1. Get your API key
 
-Request an API key at [otto@hoshoai.com](mailto:otto@hoshoai.com).
+Create one yourself at [editor.hoshoai.com/setup/git](https://editor.hoshoai.com/setup/git) — sign in with Google and click **Create my key**. It's free, instant, and the same `pfr_...` key also works for the [Hosho MCP](https://editor.hoshoai.com/setup/mcp).
+
+(Prefer a human? [otto@hoshoai.com](mailto:otto@hoshoai.com) works too.)
 
 ### 2. Store it as a secret in your repo
 
@@ -33,7 +35,7 @@ In your GitHub repo, go to **Settings > Secrets and variables > Actions > New re
 
 | Secret name | Value |
 |-------------|-------|
-| `HOSHO_API_KEY` | The API key you received |
+| `HOSHO_API_KEY` | The `pfr_...` key you created |
 
 ### 3. Create a workflow file
 

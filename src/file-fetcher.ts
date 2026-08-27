@@ -52,6 +52,45 @@ export function fetchFileVersions(
 }
 
 /**
+ * The MERGE BASE of the PR — the commit the branch actually diverged from.
+ *
+ * WHY NOT `pr.base.sha`: that is the *tip* of the base branch right now, which moves under every
+ * open PR. appsmith-v2's main takes ~36 commits/day (145 in 4 days, 26 of them touching
+ * `backend/app/llm/skills/`), so a PR's before-side content churns for edits the PR never made.
+ *
+ * Two consequences, and the second is the one that matters:
+ *  1. COST — the assembled before-side changes, the dedupe hash busts, and the PR re-bills a full
+ *     review for someone else's commit.
+ *  2. CORRECTNESS — if a prompt is edited on main after a PR branched, a two-dot diff shows that PR
+ *     *reverting* a change it never touched, and the bot reviews a change that does not exist.
+ *     GitHub's own "Files changed" tab uses the three-dot merge-base for exactly this reason.
+ *
+ * FAILS OPEN to `baseSha`: a shallow clone (no `fetch-depth: 0`), an unfetched base commit, or any
+ * git surprise returns the old ref and restores today's behaviour. Never blocks a review.
+ */
+export function resolveMergeBase(baseSha: string, headSha: string): string {
+  try {
+    const out = execSync(`git merge-base ${baseSha} ${headSha}`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    if (!/^[0-9a-f]{7,40}$/.test(out)) {
+      core.warning(`merge-base returned an unusable ref ("${out}") — falling back to base tip.`);
+      return baseSha;
+    }
+    return out;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    core.warning(
+      `Could not compute merge-base of ${baseSha.substring(0, 7)}..${headSha.substring(0, 7)} ` +
+        `(${message.split('\n')[0]}). Falling back to the base branch tip — ` +
+        'the diff may include commits this PR did not make. Set `fetch-depth: 0` on actions/checkout.'
+    );
+    return baseSha;
+  }
+}
+
+/**
  * Reads a file from a specific git commit using `git show`.
  * Returns null if the file doesn't exist at that commit.
  */
