@@ -21,11 +21,26 @@ import {
   BOT_MARKER,
 } from './output-formatter';
 import { ComparisonResult, ChangeItem } from './types';
-import { readPriorState, partitionByHash } from './review-state';
+import { readPriorState, partitionByHash, parseStateBlock } from './review-state';
 
 // Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
 // inferred from behaviour. Bump on release alongside the git tag.
 const ACTION_VERSION = 'v1.45.0';
+
+/**
+ * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.
+ *
+ * `github.context.eventName` is only ever `pull_request` for the push path, which collapses
+ * `opened` and `synchronize` into one bucket — and the whole dedupe thesis is that `synchronize`
+ * re-fires on every push while GitHub applies the workflow's `paths` filter to the PR's WHOLE diff.
+ * Without the action, "is the dedupe holding on re-pushes?" is unanswerable from the stored data.
+ */
+function triggerName(): string {
+  const action = github.context.payload?.action;
+  return typeof action === 'string' && action
+    ? `${github.context.eventName}:${action}`
+    : github.context.eventName;
+}
 
 /**
  * Strip boilerplate from custom principles file: HTML comments and # headings.
@@ -440,7 +455,7 @@ async function runPRMode(
     // The whole point of the dedupe, and the only place it is observable: no review ran, so nothing
     // else in any store will ever record that this push happened.
     await sendBotEvent(apiUrl, apiKey, {
-      repository: `${owner}/${repo}`, prNumber: pullNumber, event: github.context.eventName,
+      repository: `${owner}/${repo}`, prNumber: pullNumber, event: triggerName(),
       filesTotal: apiFiles.length, filesReviewed: 0, filesSkipped: unchanged.length,
       actionVersion: ACTION_VERSION, skippedEntirely: true,
     });
@@ -608,9 +623,13 @@ async function runPRMode(
   // money); `filesSkipped` appears nowhere but here, and it is the number that says whether the
   // content-hash dedupe is earning its keep.
   await sendBotEvent(apiUrl, apiKey, {
-    repository: repoFullName, prNumber: pullNumber, event: github.context.eventName,
+    repository: repoFullName, prNumber: pullNumber, event: triggerName(),
     filesTotal: apiFiles.length, filesReviewed: changed.length, filesSkipped: unchanged.length,
     actionVersion: ACTION_VERSION,
+    // Comment health. `stateEntries < filesTotal` means the comment truncated and a file lost its
+    // dedupe state — which then re-bills on every push, permanently. Measured on four live PRs.
+    commentBytes: commentBody.length,
+    stateEntries: parseStateBlock(commentBody).size,
   });
 
   core.info('Done.');

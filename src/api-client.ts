@@ -153,6 +153,8 @@ export async function sendBotEvent(
     filesSkipped: number;
     actionVersion?: string;
     skippedEntirely?: boolean;
+    commentBytes?: number;
+    stateEntries?: number;
   }
 ): Promise<void> {
   const controller = new AbortController();
