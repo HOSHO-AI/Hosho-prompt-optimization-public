@@ -158,6 +158,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.EMPTY_ASSEMBLY_CONFIG = void 0;
 exports.fetchFileVersions = fetchFileVersions;
+exports.resolveMergeBase = resolveMergeBase;
 exports.gitShowFile = gitShowFile;
 exports.fetchFileFromDisk = fetchFileFromDisk;
 exports.resolveTemplateVariables = resolveTemplateVariables;
@@ -211,6 +212,43 @@ function fetchFileVersions(change, baseSha, headSha) {
         }
     }
     return { before, after };
+}
+/**
+ * The MERGE BASE of the PR — the commit the branch actually diverged from.
+ *
+ * WHY NOT `pr.base.sha`: that is the *tip* of the base branch right now, which moves under every
+ * open PR. appsmith-v2's main takes ~36 commits/day (145 in 4 days, 26 of them touching
+ * `backend/app/llm/skills/`), so a PR's before-side content churns for edits the PR never made.
+ *
+ * Two consequences, and the second is the one that matters:
+ *  1. COST — the assembled before-side changes, the dedupe hash busts, and the PR re-bills a full
+ *     review for someone else's commit.
+ *  2. CORRECTNESS — if a prompt is edited on main after a PR branched, a two-dot diff shows that PR
+ *     *reverting* a change it never touched, and the bot reviews a change that does not exist.
+ *     GitHub's own "Files changed" tab uses the three-dot merge-base for exactly this reason.
+ *
+ * FAILS OPEN to `baseSha`: a shallow clone (no `fetch-depth: 0`), an unfetched base commit, or any
+ * git surprise returns the old ref and restores today's behaviour. Never blocks a review.
+ */
+function resolveMergeBase(baseSha, headSha) {
+    try {
+        const out = (0, child_process_1.execSync)(`git merge-base ${baseSha} ${headSha}`, {
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        if (!/^[0-9a-f]{7,40}$/.test(out)) {
+            core.warning(`merge-base returned an unusable ref ("${out}") — falling back to base tip.`);
+            return baseSha;
+        }
+        return out;
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        core.warning(`Could not compute merge-base of ${baseSha.substring(0, 7)}..${headSha.substring(0, 7)} ` +
+            `(${message.split('\n')[0]}). Falling back to the base branch tip — ` +
+            'the diff may include commits this PR did not make. Set `fetch-depth: 0` on actions/checkout.');
+        return baseSha;
+    }
 }
 /**
  * Reads a file from a specific git commit using `git show`.
@@ -1213,6 +1251,17 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         prDescription = (pr.body || '').slice(0, 500);
         core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
     }
+    // The BEFORE side is read at the merge base, not the base-branch tip.
+    //
+    // GitHub's own file LIST (pulls.listFiles, below) is already three-dot — it reports what this PR
+    // changed relative to where it diverged. Reading before-side CONTENT at `pr.base.sha` made the two
+    // disagree: the list said "this PR changed 3 files", the content diff showed everything anyone
+    // else had landed on main since. That both re-billed the PR on other people's commits and could
+    // render a PR as reverting a change it never touched. Fails open to the base tip.
+    const contentBaseSha = (0, file_fetcher_1.resolveMergeBase)(baseSha, headSha);
+    if (contentBaseSha !== baseSha) {
+        core.info(`Merge base: ${contentBaseSha.substring(0, 7)} (base tip is ${baseSha.substring(0, 7)})`);
+    }
     // Step 0.5: Gather full PR file summary for context (all files, not just prompts)
     let prFileSummary = '';
     let allPRFilenames = [];
@@ -1245,10 +1294,10 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     const referenceViolationsByFile = new Map();
     const siblingPatterns = ['*prompt*.md', '*addendum*.md'];
     for (const change of changedFiles) {
-        const { before, after } = (0, file_fetcher_1.fetchFileVersions)(change, baseSha, headSha);
+        const { before, after } = (0, file_fetcher_1.fetchFileVersions)(change, contentBaseSha, headSha);
         // Resolve template variables — inject content from changed companion files
         let assembledAfter = (0, file_fetcher_1.resolveTemplateVariables)(after, change.filename, headSha, allPRFilenames);
-        let assembledBefore = before ? (0, file_fetcher_1.resolveTemplateVariables)(before, change.filename, baseSha, allPRFilenames) : null;
+        let assembledBefore = before ? (0, file_fetcher_1.resolveTemplateVariables)(before, change.filename, contentBaseSha, allPRFilenames) : null;
         const fileBundled = { skills: [], siblings: [] };
         // Maps each bundled section's display name → resolved repo path, threaded
         // into buildSegmentManifest so Segment.source is the real path (G1 parity).
@@ -1261,7 +1310,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             fileBundled.skills = r.bundled;
             Object.assign(sourcePaths, r.paths);
             if (assembledBefore !== null) {
-                assembledBefore = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledBefore, baseSha, skillsDirs).assembled;
+                assembledBefore = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledBefore, contentBaseSha, skillsDirs).assembled;
             }
         }
         // Sibling bundling — same dual-sided treatment. Handle renames: the
@@ -1273,7 +1322,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             Object.assign(sourcePaths, r.paths);
             if (assembledBefore !== null) {
                 const beforePath = (change.status === 'renamed' && change.previousFilename) ? change.previousFilename : change.filename;
-                assembledBefore = (0, file_fetcher_1.bundleSiblingsForPrompt)(assembledBefore, beforePath, baseSha, siblingPatterns).assembled;
+                assembledBefore = (0, file_fetcher_1.bundleSiblingsForPrompt)(assembledBefore, beforePath, contentBaseSha, siblingPatterns).assembled;
             }
         }
         // Shared-reference injection (WS-1) — dual-sided, same treatment as skills/siblings
@@ -1282,7 +1331,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         assembledAfter = refResult.assembled;
         const injectedRefs = refResult.injected;
         if (assembledBefore !== null) {
-            assembledBefore = (0, file_fetcher_1.resolveSharedReferences)(assembledBefore, baseSha, assemblyConfig).assembled;
+            assembledBefore = (0, file_fetcher_1.resolveSharedReferences)(assembledBefore, contentBaseSha, assemblyConfig).assembled;
         }
         // Convention check (WS-2) — run on the AUTHORED content (pre-injection). No LLM.
         // Mirrors the standard pipeline's per-mode structure (review = diff-only regression;
@@ -1322,8 +1371,10 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     //
     // FAIL OPEN: no prior comment, unparseable state, or dedupe disabled ⇒ review everything.
     const priorBody = dedupe ? await findExistingCommentBody(octokit, owner, repo, pullNumber) : undefined;
-    const carriedSections = (0, review_state_1.parseSections)(priorBody);
-    const { changed, unchanged, hashes } = (0, review_state_1.partitionByHash)(apiFiles, carriedSections, !dedupe);
+    // Two roles, two stores: the top state block decides what may be SKIPPED (truncation-proof), the
+    // inline sections supply the markdown to CARRY FORWARD (truncatable, and handled as such below).
+    const { shas: priorShas, sections: carriedSections } = (0, review_state_1.readPriorState)(priorBody);
+    const { changed, unchanged, hashes } = (0, review_state_1.partitionByHash)(apiFiles, priorShas, !dedupe);
     if (dedupe && changed.length === 0 && unchanged.length > 0) {
         // Every file is byte-identical to what we already reviewed. Leave the existing comment
         // completely untouched — not even rewritten, so GitHub does not mark it edited and the
@@ -2336,17 +2387,21 @@ function formatBundledFooter(bundledByFile) {
     return `\n<sub>Bundled review context:\n${lines.join('\n')}</sub>\n`;
 }
 /**
- * Assemble the per-file body of a PR comment, wrapping each section in the dedupe delimiters.
- *
- * The delimiters do double duty (see src/review-state.ts): they carry the content hash so the next
- * run can skip unchanged files, AND they let this run splice in the previously-rendered markdown of
- * files it did not re-review, so a partial run never looks like content was lost.
+ * The skip state for every section we BUILT — including any that truncation goes on to drop. That is
+ * the whole point: a file whose verdict did not fit must still not be re-reviewed for free next push.
  */
-function assembleSections(comparisons, prNumber, render, carry) {
+function stateFor(sections) {
+    const m = new Map();
+    for (const s of sections)
+        if (s.sha)
+            m.set(s.path, s.sha);
+    return m;
+}
+function buildSections(comparisons, prNumber, render, carry) {
     const fresh = new Map(comparisons.map(c => [c.promptFile, c]));
     const order = carry?.order ?? comparisons.map(c => c.promptFile);
     const isMultiFile = order.length > 1;
-    let md = '';
+    const out = [];
     for (const path of order) {
         const comp = fresh.get(path);
         const carried = carry?.carried.get(path);
@@ -2360,27 +2415,63 @@ function assembleSections(comparisons, prNumber, render, carry) {
             section = carried.markdown;
             sha = carried.sha;
         }
-        else {
-            continue; // neither fresh nor carried — nothing to show for this path
+        else if (carry?.hashes.has(path)) {
+            // Unchanged since the last review, but its rendered verdict is not recoverable — the previous
+            // comment was truncated before this section. Say so rather than dropping the file silently:
+            // the state block still carries its sha, so it is not re-billed, and the full text is in the
+            // Actions job summary. (Before the state block existed this file re-billed on every push
+            // forever, and STILL got truncated away — so this is strictly better on both axes.)
+            section = `### ${path}\n\n_Unchanged since the last review. The full verdict exceeded ` +
+                `GitHub's comment size limit — see the Job Summary in the Actions tab._\n\n`;
+            sha = carry.hashes.get(path);
         }
-        md += sha ? (0, review_state_1.wrapSection)(path, sha, section) : section;
-        if (isMultiFile)
-            md += `\n---\n\n`;
+        else {
+            continue; // neither fresh, carried, nor known — nothing to show for this path
+        }
+        const wrapped = sha ? (0, review_state_1.wrapSection)(path, sha, section) : section;
+        out.push({ path, sha, text: isMultiFile ? `${wrapped}\n---\n\n` : wrapped });
     }
-    return md;
+    return out;
+}
+/**
+ * Assemble the final comment body under GitHub's hard 65,536-char limit.
+ *
+ * Two defects this replaces, both measured live on appsmith PRs #17312 and #17467:
+ *
+ *  1. `md.substring(0, LIMIT - 200)` cut MID-SECTION, orphaning the tail file's `hosho-file` opener.
+ *     `parseSections` then dropped it (correctly — a half-recovered section is worse), so that file
+ *     re-billed a full review on every subsequent push and was truncated away again each time. A
+ *     permanent, self-renewing cost leak. Sections are now dropped WHOLE, from the tail.
+ *  2. The bundled footer and sign-off were appended AFTER truncation, so the body still exceeded the
+ *     limit — which is why both live comments measured 66-68 KB. The footer is now inside the budget.
+ *
+ * The skip state is rendered before any of this and is never subject to it.
+ */
+function composeComment(header, sections, footer, stateBlock) {
+    const head = `${BOT_MARKER}\n${stateBlock}${header}`;
+    const full = head + sections.map(s => s.text).join('') + footer;
+    if (full.length <= PR_COMMENT_MAX_LENGTH)
+        return full;
+    const dropped = [];
+    const kept = [...sections];
+    let note = '';
+    const body = () => head + kept.map(s => s.text).join('') + note + footer;
+    while (kept.length > 0 && body().length > PR_COMMENT_MAX_LENGTH) {
+        dropped.unshift(kept.pop().path);
+        note =
+            `\n\n---\n\n**Comment truncated.** ${dropped.length} file(s) omitted here — ` +
+                `${dropped.join(', ')}. See the Job Summary in the Actions tab for the full detailed report.\n`;
+    }
+    // Backstop: header + footer alone could in principle exceed the budget (a PR bundling very many
+    // skills). A body over 65,536 is rejected by the API outright, so clamp rather than fail the run.
+    // This cut CAN orphan a section — which is now harmless, because the skip state lives at the top
+    // and is never what gets cut. That is precisely the property the state block was added for.
+    const out = body();
+    return out.length > PR_COMMENT_MAX_LENGTH ? out.slice(0, PR_COMMENT_MAX_LENGTH) : out;
 }
 function formatPRComment(comparisons, prNumber, repoFullName = '', bundledByFile, carry) {
-    let md = `${BOT_MARKER}\n`;
-    md += formatScopeHeader(comparisons, prNumber, repoFullName, carry);
-    md += assembleSections(comparisons, prNumber, formatPRFileSection, carry);
-    // Truncate if needed
-    if (md.length > PR_COMMENT_MAX_LENGTH) {
-        md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
-        md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
-    }
-    md += formatBundledFooter(bundledByFile);
-    md += `\n*Hosho Bot*\n`;
-    return md;
+    const sections = buildSections(comparisons, prNumber, formatPRFileSection, carry);
+    return composeComment(formatScopeHeader(comparisons, prNumber, repoFullName, carry), sections, `${formatBundledFooter(bundledByFile)}\n*Hosho Bot*\n`, (0, review_state_1.renderStateBlock)(stateFor(sections)));
 }
 function formatJobSummary(comparisons, prNumber, repoFullName = '', bundledByFile) {
     let md = '';
@@ -2407,17 +2498,10 @@ function formatReviewFileSection(comp, prNumber, isMultiFile) {
     return md;
 }
 function formatReviewComment(comparisons, prNumber, repoFullName = '', bundledByFile, carry) {
-    let md = `${BOT_MARKER}\n`;
-    md += formatScopeHeader(comparisons, prNumber, repoFullName, carry);
-    md += assembleSections(comparisons, prNumber, formatReviewFileSection, carry);
-    if (md.length > PR_COMMENT_MAX_LENGTH) {
-        md = md.substring(0, PR_COMMENT_MAX_LENGTH - 200);
-        md += `\n\n---\n\n**Comment truncated.** See the Job Summary in the Actions tab for the full detailed report.\n`;
-    }
-    md += formatBundledFooter(bundledByFile);
-    md += `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n`;
-    md += `*Hosho Bot*\n`;
-    return md;
+    const sections = buildSections(comparisons, prNumber, formatReviewFileSection, carry);
+    return composeComment(formatScopeHeader(comparisons, prNumber, repoFullName, carry), sections, `${formatBundledFooter(bundledByFile)}` +
+        `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n` +
+        `*Hosho Bot*\n`, (0, review_state_1.renderStateBlock)(stateFor(sections)));
 }
 function formatReviewJobSummary(comparisons, prNumber, repoFullName = '', bundledByFile) {
     let md = '';
@@ -2446,6 +2530,9 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.fileHash = fileHash;
 exports.wrapSection = wrapSection;
 exports.parseSections = parseSections;
+exports.renderStateBlock = renderStateBlock;
+exports.parseStateBlock = parseStateBlock;
+exports.readPriorState = readPriorState;
 exports.partitionByHash = partitionByHash;
 /**
  * Content-hash dedupe state, carried inside the bot's own PR comment.
@@ -2464,6 +2551,18 @@ exports.partitionByHash = partitionByHash;
  *      carry the other eight forward verbatim — nothing disappears from the comment.
  * A separate state blob was rejected: the live comment on PR #15717 is 65,986 chars, already at
  * GitHub's 65,536 limit and being truncated, so there is no room to duplicate results.
+ *
+ * TRUNCATION. GitHub hard-caps a comment at 65,536 chars and appsmith's busiest PRs sit above it —
+ * #17312 (67,825 B) and #17467 (66,365 B) both carry the `Comment truncated` marker with ELEVEN
+ * opening `hosho-file` tags and TEN closing. The tail section loses its closer, `parseSections`
+ * (correctly) drops it, and that file then re-bills on every future push, forever. Truncating the
+ * tail is therefore not a display problem — it is an unbounded cost leak.
+ *
+ * So the SKIP DECISION reads a compact `<!-- hosho-state v1 {…} -->` block emitted immediately after
+ * the bot marker: ~80 B per file, at the TOP, where a tail truncation structurally cannot reach it.
+ * The inline per-section delimiters remain, but their only remaining job is carrying rendered
+ * markdown forward. The two are read together by `readPriorState`, which falls back to the inline
+ * shas so comments written before this shipped still dedupe.
  *
  * FAIL OPEN, ALWAYS. Missing, malformed or truncation-damaged state means "review everything". The
  * only acceptable failure direction is spending money we did not need to — never withholding a
@@ -2514,21 +2613,68 @@ function parseSections(body) {
     }
     return out;
 }
+const STATE_RE = /<!--\s*hosho-state v1 (\{.*?\})\s*-->/;
+/**
+ * The authoritative skip state, rendered directly under the bot marker.
+ *
+ * One flat `{path: sha}` object, so its size is ~80 B per file (1.7 KB at 21 files) and it stays
+ * far inside the budget even when the rendered verdicts do not.
+ */
+function renderStateBlock(hashes) {
+    if (hashes.size === 0)
+        return '';
+    return `<!-- hosho-state v1 ${JSON.stringify(Object.fromEntries(hashes))} -->\n`;
+}
+/** Read the top state block. Any malformed or non-sha entry is skipped, never guessed at. */
+function parseStateBlock(body) {
+    const out = new Map();
+    if (!body)
+        return out;
+    const m = STATE_RE.exec(body);
+    if (!m)
+        return out;
+    try {
+        const parsed = JSON.parse(m[1]);
+        for (const [path, sha] of Object.entries(parsed)) {
+            if (typeof sha === 'string' && /^[a-f0-9]{64}$/.test(sha))
+                out.set(path, sha);
+        }
+    }
+    catch {
+        return new Map(); // unparseable ⇒ no state ⇒ review everything
+    }
+    return out;
+}
+/**
+ * Everything recoverable from the previous comment, in the two roles the two stores now have:
+ *   `shas`     — what may be SKIPPED. Prefers the truncation-proof top block; falls back to the
+ *                inline delimiters so a comment written before the top block shipped still dedupes
+ *                (without this, every customer pays one full re-review on upgrade).
+ *   `sections` — what can be CARRIED FORWARD verbatim. Necessarily incomplete after a truncation;
+ *                that is what `renderedPaths` below is for.
+ */
+function readPriorState(body) {
+    const sections = parseSections(body);
+    const shas = parseStateBlock(body);
+    for (const [path, sec] of sections)
+        if (!shas.has(path))
+            shas.set(path, sec.sha);
+    return { shas, sections };
+}
 /**
  * Split candidate files by whether their content hash matches the carried state.
  *
  * `force` (the `/hosho-review` slash command, or `dedupe: false`) sends everything to `changed`.
  * A file with no carried section is always `changed` — first run reviews everything.
  */
-function partitionByHash(files, carried, force = false) {
+function partitionByHash(files, priorShas, force = false) {
     const changed = [];
     const unchanged = [];
     const hashes = new Map();
     for (const f of files) {
         const h = fileHash(f.before, f.after);
         hashes.set(f.path, h);
-        const prior = carried.get(f.path);
-        if (!force && prior && prior.sha === h)
+        if (!force && priorShas.get(f.path) === h)
             unchanged.push(f);
         else
             changed.push(f);

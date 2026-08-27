@@ -9,6 +9,7 @@ import {
   fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, bundleSiblingsForPrompt,
   resolveSharedReferences, parseAssemblyConfig, buildSegmentManifest,
   AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, evaluateReferenceConvention,
+  resolveMergeBase,
 } from './file-fetcher';
 import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
@@ -20,7 +21,7 @@ import {
   BOT_MARKER,
 } from './output-formatter';
 import { ComparisonResult, ChangeItem } from './types';
-import { parseSections, partitionByHash } from './review-state';
+import { readPriorState, partitionByHash } from './review-state';
 
 /**
  * Strip boilerplate from custom principles file: HTML comments and # headings.
@@ -224,6 +225,18 @@ async function runPRMode(
     core.info(`PR #${pullNumber}: base=${baseSha.substring(0, 7)} head=${headSha.substring(0, 7)}`);
   }
 
+  // The BEFORE side is read at the merge base, not the base-branch tip.
+  //
+  // GitHub's own file LIST (pulls.listFiles, below) is already three-dot — it reports what this PR
+  // changed relative to where it diverged. Reading before-side CONTENT at `pr.base.sha` made the two
+  // disagree: the list said "this PR changed 3 files", the content diff showed everything anyone
+  // else had landed on main since. That both re-billed the PR on other people's commits and could
+  // render a PR as reverting a change it never touched. Fails open to the base tip.
+  const contentBaseSha = resolveMergeBase(baseSha, headSha);
+  if (contentBaseSha !== baseSha) {
+    core.info(`Merge base: ${contentBaseSha.substring(0, 7)} (base tip is ${baseSha.substring(0, 7)})`);
+  }
+
   // Step 0.5: Gather full PR file summary for context (all files, not just prompts)
   let prFileSummary = '';
   let allPRFilenames: string[] = [];
@@ -267,11 +280,11 @@ async function runPRMode(
   const siblingPatterns = ['*prompt*.md', '*addendum*.md'];
 
   for (const change of changedFiles) {
-    const { before, after } = fetchFileVersions(change, baseSha, headSha);
+    const { before, after } = fetchFileVersions(change, contentBaseSha, headSha);
 
     // Resolve template variables — inject content from changed companion files
     let assembledAfter = resolveTemplateVariables(after, change.filename, headSha, allPRFilenames);
-    let assembledBefore = before ? resolveTemplateVariables(before, change.filename, baseSha, allPRFilenames) : null;
+    let assembledBefore = before ? resolveTemplateVariables(before, change.filename, contentBaseSha, allPRFilenames) : null;
 
     const fileBundled = { skills: [] as string[], siblings: [] as string[] };
     // Maps each bundled section's display name → resolved repo path, threaded
@@ -286,7 +299,7 @@ async function runPRMode(
       fileBundled.skills = r.bundled;
       Object.assign(sourcePaths, r.paths);
       if (assembledBefore !== null) {
-        assembledBefore = bundleSkillsForPrompt(assembledBefore, baseSha, skillsDirs).assembled;
+        assembledBefore = bundleSkillsForPrompt(assembledBefore, contentBaseSha, skillsDirs).assembled;
       }
     }
 
@@ -299,7 +312,7 @@ async function runPRMode(
       Object.assign(sourcePaths, r.paths);
       if (assembledBefore !== null) {
         const beforePath = (change.status === 'renamed' && change.previousFilename) ? change.previousFilename : change.filename;
-        assembledBefore = bundleSiblingsForPrompt(assembledBefore, beforePath, baseSha, siblingPatterns).assembled;
+        assembledBefore = bundleSiblingsForPrompt(assembledBefore, beforePath, contentBaseSha, siblingPatterns).assembled;
       }
     }
 
@@ -309,7 +322,7 @@ async function runPRMode(
     assembledAfter = refResult.assembled;
     const injectedRefs = refResult.injected;
     if (assembledBefore !== null) {
-      assembledBefore = resolveSharedReferences(assembledBefore, baseSha, assemblyConfig).assembled;
+      assembledBefore = resolveSharedReferences(assembledBefore, contentBaseSha, assemblyConfig).assembled;
     }
 
     // Convention check (WS-2) — run on the AUTHORED content (pre-injection). No LLM.
@@ -354,8 +367,10 @@ async function runPRMode(
   //
   // FAIL OPEN: no prior comment, unparseable state, or dedupe disabled ⇒ review everything.
   const priorBody = dedupe ? await findExistingCommentBody(octokit, owner, repo, pullNumber) : undefined;
-  const carriedSections = parseSections(priorBody);
-  const { changed, unchanged, hashes } = partitionByHash(apiFiles, carriedSections, !dedupe);
+  // Two roles, two stores: the top state block decides what may be SKIPPED (truncation-proof), the
+  // inline sections supply the markdown to CARRY FORWARD (truncatable, and handled as such below).
+  const { shas: priorShas, sections: carriedSections } = readPriorState(priorBody);
+  const { changed, unchanged, hashes } = partitionByHash(apiFiles, priorShas, !dedupe);
 
   if (dedupe && changed.length === 0 && unchanged.length > 0) {
     // Every file is byte-identical to what we already reviewed. Leave the existing comment

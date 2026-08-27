@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { fileHash, wrapSection, parseSections, partitionByHash } from '../src/review-state';
+import {
+  fileHash, wrapSection, parseSections, partitionByHash,
+  renderStateBlock, parseStateBlock, readPriorState,
+} from '../src/review-state';
 import { formatPRComment } from '../src/output-formatter';
 import { ComparisonResult } from '../src/types';
 
@@ -101,8 +104,8 @@ describe('partitionByHash', () => {
 
   it('skips only the files whose content pair is unchanged', () => {
     const carried = new Map([
-      ['p/a-prompt.md', { sha: fileHash(A, B), markdown: 'a' }],
-      ['p/b-prompt.md', { sha: 'stale'.padEnd(64, '0'), markdown: 'b' }],
+      ['p/a-prompt.md', fileHash(A, B)],
+      ['p/b-prompt.md', 'stale'.padEnd(64, '0')],
     ]);
     const r = partitionByHash(files, carried);
     expect(r.changed.map(f => f.path)).toEqual(['p/b-prompt.md']);
@@ -110,7 +113,7 @@ describe('partitionByHash', () => {
   });
 
   it('force (slash command / dedupe:false) reviews everything regardless of state', () => {
-    const carried = new Map(files.map(f => [f.path, { sha: fileHash(f.before, f.after), markdown: '' }]));
+    const carried = new Map(files.map(f => [f.path, fileHash(f.before, f.after)]));
     expect(partitionByHash(files, carried).changed).toHaveLength(0);       // would skip…
     expect(partitionByHash(files, carried, true).changed).toHaveLength(2); // …but force overrides
   });
@@ -166,5 +169,148 @@ describe('partial re-review keeps the comment whole', () => {
     const body = formatPRComment([mk('p/one-prompt.md')], 7, 'org/repo');
     expect(body).toContain('Hosho PR Review');
     expect(parseSections(body).size).toBe(0);
+  });
+});
+
+// ── Truncation ────────────────────────────────────────────────────────────────────────────
+// The defect these lock, measured live: PR #17312 (67,825 B) and #17467 (66,365 B) both carry the
+// `Comment truncated` marker with ELEVEN `hosho-file` openers and TEN closers. The tail section was
+// cut mid-way, its state was unreadable, and that file re-billed a full review on every push —
+// forever, because the re-review landed in the same tail position and was cut again.
+describe('state block survives what the inline delimiters cannot', () => {
+  const shas = new Map([['a/one-prompt.md', 'a'.repeat(64)], ['b/two-prompt.md', 'b'.repeat(64)]]);
+
+  it('round-trips every path/sha pair', () => {
+    expect(parseStateBlock(renderStateBlock(shas))).toEqual(shas);
+  });
+
+  it('stays a rounding error against the 65,000-char budget at appsmith scale', () => {
+    // 21 files is the widest real PR observed (#17312). Realistic path lengths; the sha is the
+    // irreducible 64 chars. If this block could itself overflow, the fix would be circular.
+    const many = new Map(Array.from({ length: 21 }, (_, i) =>
+      [`backend/app/llm/agents/agent-${i}/system-prompt.md`, String(i % 10).repeat(64)]));
+    const block = renderStateBlock(many);
+    expect(block.length).toBeLessThan(3_000);          // ~2.5 KB — under 5% of the budget
+    expect(parseStateBlock(block).size).toBe(21);      // and still fully readable at that size
+  });
+
+  it('renders nothing when there is no state (pre-dedupe callers stay byte-identical)', () => {
+    expect(renderStateBlock(new Map())).toBe('');
+  });
+
+  it('survives a truncation that destroys every inline section', () => {
+    const body = `<!-- prompt-factor-reviewer-api -->\n${renderStateBlock(shas)}## Header\n` +
+      wrapSection('a/one-prompt.md', 'a'.repeat(64), 'A'.repeat(400)) +
+      wrapSection('b/two-prompt.md', 'b'.repeat(64), 'B'.repeat(400));
+    const truncated = body.slice(0, 300); // cuts deep into the first section
+
+    expect(parseSections(truncated).size).toBe(0);            // markdown is genuinely gone…
+    expect(parseStateBlock(truncated)).toEqual(shas);         // …but the skip decision is intact
+  });
+
+  // FAIL OPEN — a state block we cannot trust must mean "review everything", never a guess.
+  it('yields nothing for a malformed or absent block', () => {
+    expect(parseStateBlock(undefined).size).toBe(0);
+    expect(parseStateBlock('<!-- hosho-state v1 {not json} -->').size).toBe(0);
+    expect(parseStateBlock('<!-- hosho-state v1 {"p":"tooshort"} -->').size).toBe(0);
+    expect(parseStateBlock('<!-- hosho-state v2 {"p":"' + 'a'.repeat(64) + '"} -->').size).toBe(0);
+  });
+});
+
+describe('readPriorState', () => {
+  it('reads shas from the top block and markdown from the sections', () => {
+    const sha = 'c'.repeat(64);
+    const body = renderStateBlock(new Map([['p/x-prompt.md', sha]])) +
+      wrapSection('p/x-prompt.md', sha, 'VERDICT\n');
+    const { shas, sections } = readPriorState(body);
+    expect(shas.get('p/x-prompt.md')).toBe(sha);
+    expect(sections.get('p/x-prompt.md')!.markdown).toBe('VERDICT\n');
+  });
+
+  it('falls back to inline shas for comments written before the block shipped', () => {
+    // Without this every existing customer PR pays one full re-review the day this deploys.
+    const sha = 'd'.repeat(64);
+    const { shas } = readPriorState(wrapSection('p/x-prompt.md', sha, 'old\n'));
+    expect(shas.get('p/x-prompt.md')).toBe(sha);
+  });
+
+  it('prefers the top block when a section disagrees (the block is authoritative)', () => {
+    const body = renderStateBlock(new Map([['p/x-prompt.md', 'e'.repeat(64)]])) +
+      wrapSection('p/x-prompt.md', 'f'.repeat(64), 'stale\n');
+    expect(readPriorState(body).shas.get('p/x-prompt.md')).toBe('e'.repeat(64));
+  });
+});
+
+describe('a comment that overflows GitHub stays complete where it counts', () => {
+  // A file whose rendered verdict is genuinely large — 21 of these is how #17312 reached 67,825 B.
+  const fat = (path: string): ComparisonResult => ({
+    promptFile: path,
+    isNewFile: false,
+    synthesis: {
+      promptName: path.split('/').pop()!, promptFile: path, promptDescription: 'x'.repeat(2_000),
+      overallScore: 'Good', hasCriticalIssues: false,
+      factorInsights: [{
+        factorId: 'scope', factorName: 'Scope', score: 5, scoreLabel: 'Needs Work',
+        findings: Array.from({ length: 14 }, (_, i) => ({
+          title: `Finding ${i} ${'y'.repeat(200)}`, description: 'z'.repeat(600), severity: 'suggestion',
+        })),
+      }],
+    } as never,
+    factorResults: [], deltas: [], hasRegression: false, hasCriticalIssue: false,
+  });
+
+  const paths = Array.from({ length: 25 }, (_, i) => `backend/app/llm/agents/agent-${i}/system-prompt.md`);
+  const hashes = new Map(paths.map((p, i) => [p, String(i % 10).repeat(64)]));
+  const body = formatPRComment(paths.map(fat), 17312, 'appsmithorg/appsmith-v2', undefined, {
+    order: paths, carried: new Map(), hashes,
+  });
+
+  it('the fixture genuinely overflows — otherwise this suite proves nothing', () => {
+    // formatPRComment now always fits, so "did it overflow?" is read from the evidence it leaves:
+    // sections were dropped and the marker was emitted.
+    expect(body).toContain('**Comment truncated.**');
+    expect(parseSections(body).size).toBeLessThan(paths.length);
+    // And the raw material really was oversized: what survived is at the budget, not merely short.
+    expect(body.length).toBeGreaterThan(60_000);
+  });
+
+  it('lands INSIDE GitHub\'s hard limit, footer and sign-off included', () => {
+    // The old code truncated and THEN appended the footer, which is why both live comments measured
+    // over the cap despite carrying the truncation marker.
+    expect(body.length).toBeLessThanOrEqual(65_536);
+    expect(body).toContain('*Hosho Bot*');
+  });
+
+  it('carries state for EVERY file, including the ones truncation dropped', () => {
+    // This is the leak: a dropped file used to lose its state and re-bill on every push, forever.
+    expect(parseStateBlock(body)).toEqual(hashes);
+    expect(parseStateBlock(body).size).toBe(25);
+  });
+
+  it('leaves no half-written section behind — every surviving opener has its closer', () => {
+    const openers = [...body.matchAll(/<!--\s*hosho-file\s/g)].length;
+    const closers = [...body.matchAll(/<!-- \/hosho-file -->/g)].length;
+    expect(openers).toBe(closers);                    // #17312 measured 11 vs 10
+    expect(parseSections(body).size).toBe(openers);   // and every one is recoverable
+  });
+
+  it('names what it omitted rather than trailing off mid-sentence', () => {
+    expect(body).toContain('**Comment truncated.**');
+    expect(body).toMatch(/file\(s\) omitted here/);
+    expect(body).toContain(paths[paths.length - 1]);  // the dropped tail file is named
+  });
+
+  it('re-renders an unchanged-but-dropped file as a placeholder, not a silent hole', () => {
+    // Next push: the state block says these are unchanged (so no API call), but their markdown was
+    // truncated away last time and cannot be carried. The file must still appear.
+    const survived = parseSections(body);
+    const droppedPath = paths.find(p => !survived.has(p))!;
+    expect(droppedPath).toBeDefined();
+    const next = formatPRComment([], 17312, 'appsmithorg/appsmith-v2', undefined, {
+      order: paths, carried: survived, hashes,
+    });
+    expect(next).toContain(droppedPath);
+    expect(next).toContain('Unchanged since the last review');
+    expect(parseStateBlock(next).get(droppedPath)).toBe(hashes.get(droppedPath));
   });
 });

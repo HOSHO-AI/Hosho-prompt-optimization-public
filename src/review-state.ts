@@ -16,6 +16,18 @@
  * A separate state blob was rejected: the live comment on PR #15717 is 65,986 chars, already at
  * GitHub's 65,536 limit and being truncated, so there is no room to duplicate results.
  *
+ * TRUNCATION. GitHub hard-caps a comment at 65,536 chars and appsmith's busiest PRs sit above it —
+ * #17312 (67,825 B) and #17467 (66,365 B) both carry the `Comment truncated` marker with ELEVEN
+ * opening `hosho-file` tags and TEN closing. The tail section loses its closer, `parseSections`
+ * (correctly) drops it, and that file then re-bills on every future push, forever. Truncating the
+ * tail is therefore not a display problem — it is an unbounded cost leak.
+ *
+ * So the SKIP DECISION reads a compact `<!-- hosho-state v1 {…} -->` block emitted immediately after
+ * the bot marker: ~80 B per file, at the TOP, where a tail truncation structurally cannot reach it.
+ * The inline per-section delimiters remain, but their only remaining job is carrying rendered
+ * markdown forward. The two are read together by `readPriorState`, which falls back to the inline
+ * shas so comments written before this shipped still dedupe.
+ *
  * FAIL OPEN, ALWAYS. Missing, malformed or truncation-damaged state means "review everything". The
  * only acceptable failure direction is spending money we did not need to — never withholding a
  * review the customer should have had.
@@ -74,6 +86,54 @@ export function parseSections(body: string | undefined | null): Map<string, Carr
   return out;
 }
 
+const STATE_RE = /<!--\s*hosho-state v1 (\{.*?\})\s*-->/;
+
+/**
+ * The authoritative skip state, rendered directly under the bot marker.
+ *
+ * One flat `{path: sha}` object, so its size is ~80 B per file (1.7 KB at 21 files) and it stays
+ * far inside the budget even when the rendered verdicts do not.
+ */
+export function renderStateBlock(hashes: Map<string, string>): string {
+  if (hashes.size === 0) return '';
+  return `<!-- hosho-state v1 ${JSON.stringify(Object.fromEntries(hashes))} -->\n`;
+}
+
+/** Read the top state block. Any malformed or non-sha entry is skipped, never guessed at. */
+export function parseStateBlock(body: string | undefined | null): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!body) return out;
+  const m = STATE_RE.exec(body);
+  if (!m) return out;
+  try {
+    const parsed = JSON.parse(m[1]) as Record<string, unknown>;
+    for (const [path, sha] of Object.entries(parsed)) {
+      if (typeof sha === 'string' && /^[a-f0-9]{64}$/.test(sha)) out.set(path, sha);
+    }
+  } catch {
+    return new Map(); // unparseable ⇒ no state ⇒ review everything
+  }
+  return out;
+}
+
+/**
+ * Everything recoverable from the previous comment, in the two roles the two stores now have:
+ *   `shas`     — what may be SKIPPED. Prefers the truncation-proof top block; falls back to the
+ *                inline delimiters so a comment written before the top block shipped still dedupes
+ *                (without this, every customer pays one full re-review on upgrade).
+ *   `sections` — what can be CARRIED FORWARD verbatim. Necessarily incomplete after a truncation;
+ *                that is what `renderedPaths` below is for.
+ */
+export function readPriorState(body: string | undefined | null): {
+  shas: Map<string, string>;
+  sections: Map<string, CarriedSection>;
+} {
+  const sections = parseSections(body);
+  const shas = parseStateBlock(body);
+  for (const [path, sec] of sections) if (!shas.has(path)) shas.set(path, sec.sha);
+  return { shas, sections };
+}
+
 /** Files whose assembled content is unchanged since the last review, and those that must re-run. */
 export interface Partitioned<T> {
   changed: T[];
@@ -89,7 +149,7 @@ export interface Partitioned<T> {
  */
 export function partitionByHash<T extends { path: string; before: string | null; after: string }>(
   files: T[],
-  carried: Map<string, CarriedSection>,
+  priorShas: Map<string, string>,
   force = false
 ): Partitioned<T> {
   const changed: T[] = [];
@@ -98,8 +158,7 @@ export function partitionByHash<T extends { path: string; before: string | null;
   for (const f of files) {
     const h = fileHash(f.before, f.after);
     hashes.set(f.path, h);
-    const prior = carried.get(f.path);
-    if (!force && prior && prior.sha === h) unchanged.push(f);
+    if (!force && priorShas.get(f.path) === h) unchanged.push(f);
     else changed.push(f);
   }
   return { changed, unchanged, hashes };
