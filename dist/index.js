@@ -42,6 +42,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DEFAULT_API_URL = void 0;
 exports.callReviewAPI = callReviewAPI;
+exports.sendBotEvent = sendBotEvent;
 const core = __importStar(__nccwpck_require__(7484));
 const DEFAULT_API_URL = 'https://2pdp5lkd4g5a4hi3aigcdxighe0ebgjy.lambda-url.us-east-1.on.aws/';
 exports.DEFAULT_API_URL = DEFAULT_API_URL;
@@ -112,6 +113,36 @@ function isRetryableError(error) {
 }
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+/**
+ * Fire-and-forget PR-bot beacon: counts only, no LLM call, no cost, no content.
+ *
+ * WHY. The action calls the Lambda directly, so `mcp_usage_events` never sees it — and on a dedupe
+ * SKIP there is no request at all, so the reviews we AVOID leave no trace in any store. That means
+ * the single number that says whether the content-hash dedupe is working (suppression rate) could
+ * only be obtained by a hand census of GitHub Actions logs; it measured 42.4% on appsmith-v2.
+ *
+ * Deliberately fragile-by-design: 5-second timeout, every failure swallowed, never awaited in a way
+ * that can fail the run. A telemetry write must not be able to turn a customer's PR check red.
+ */
+async function sendBotEvent(apiUrl, apiKey, botEvent) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+        await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apiKey, mode: 'pr', botEvent }),
+            signal: controller.signal,
+        });
+    }
+    catch {
+        // Swallowed on purpose — see above. No core.warning either: a noisy telemetry failure in every
+        // customer's log is worse than a missing counter.
+    }
+    finally {
+        clearTimeout(timer);
+    }
 }
 //# sourceMappingURL=api-client.js.map
 
@@ -1072,6 +1103,9 @@ const file_fetcher_1 = __nccwpck_require__(5215);
 const api_client_1 = __nccwpck_require__(4427);
 const output_formatter_1 = __nccwpck_require__(1061);
 const review_state_1 = __nccwpck_require__(2279);
+// Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
+// inferred from behaviour. Bump on release alongside the git tag.
+const ACTION_VERSION = 'v1.45.0';
 /**
  * Strip boilerplate from custom principles file: HTML comments and # headings.
  * Returns empty string if only boilerplate remains.
@@ -1384,6 +1418,13 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         core.summary.addRaw(`### Hosho: no re-review needed\n\n${unchanged.length} prompt file(s) unchanged since the ` +
             `last review; no API calls made.\n`);
         await core.summary.write();
+        // The whole point of the dedupe, and the only place it is observable: no review ran, so nothing
+        // else in any store will ever record that this push happened.
+        await (0, api_client_1.sendBotEvent)(apiUrl, apiKey, {
+            repository: `${owner}/${repo}`, prNumber: pullNumber, event: github.context.eventName,
+            filesTotal: apiFiles.length, filesReviewed: 0, filesSkipped: unchanged.length,
+            actionVersion: ACTION_VERSION, skippedEntirely: true,
+        });
         return;
     }
     if (dedupe && unchanged.length > 0) {
@@ -1514,6 +1555,14 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     const overallScores = comparisons.map((c) => c.synthesis.overallScore);
     core.setOutput('overall_score', overallScores.join(', '));
     core.setOutput('review_summary', comparisons.map((c) => c.synthesis.promptDescription).join(' | '));
+    // Counts for the run that just happened. `filesReviewed` also shows up in cx.llm_costs (it cost
+    // money); `filesSkipped` appears nowhere but here, and it is the number that says whether the
+    // content-hash dedupe is earning its keep.
+    await (0, api_client_1.sendBotEvent)(apiUrl, apiKey, {
+        repository: repoFullName, prNumber: pullNumber, event: github.context.eventName,
+        filesTotal: apiFiles.length, filesReviewed: changed.length, filesSkipped: unchanged.length,
+        actionVersion: ACTION_VERSION,
+    });
     core.info('Done.');
 }
 // ---- On-Demand Mode ----

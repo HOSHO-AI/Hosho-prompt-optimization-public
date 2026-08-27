@@ -11,7 +11,7 @@ import {
   AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, evaluateReferenceConvention,
   resolveMergeBase,
 } from './file-fetcher';
-import { callReviewAPI, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
+import { callReviewAPI, sendBotEvent, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
   formatPRComment,
   formatReviewComment,
@@ -22,6 +22,10 @@ import {
 } from './output-formatter';
 import { ComparisonResult, ChangeItem } from './types';
 import { readPriorState, partitionByHash } from './review-state';
+
+// Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
+// inferred from behaviour. Bump on release alongside the git tag.
+const ACTION_VERSION = 'v1.45.0';
 
 /**
  * Strip boilerplate from custom principles file: HTML comments and # headings.
@@ -385,6 +389,13 @@ async function runPRMode(
       `last review; no API calls made.\n`
     );
     await core.summary.write();
+    // The whole point of the dedupe, and the only place it is observable: no review ran, so nothing
+    // else in any store will ever record that this push happened.
+    await sendBotEvent(apiUrl, apiKey, {
+      repository: `${owner}/${repo}`, prNumber: pullNumber, event: github.context.eventName,
+      filesTotal: apiFiles.length, filesReviewed: 0, filesSkipped: unchanged.length,
+      actionVersion: ACTION_VERSION, skippedEntirely: true,
+    });
     return;
   }
   if (dedupe && unchanged.length > 0) {
@@ -525,6 +536,15 @@ async function runPRMode(
   const overallScores = comparisons.map((c) => c.synthesis.overallScore);
   core.setOutput('overall_score', overallScores.join(', '));
   core.setOutput('review_summary', comparisons.map((c) => c.synthesis.promptDescription).join(' | '));
+
+  // Counts for the run that just happened. `filesReviewed` also shows up in cx.llm_costs (it cost
+  // money); `filesSkipped` appears nowhere but here, and it is the number that says whether the
+  // content-hash dedupe is earning its keep.
+  await sendBotEvent(apiUrl, apiKey, {
+    repository: repoFullName, prNumber: pullNumber, event: github.context.eventName,
+    filesTotal: apiFiles.length, filesReviewed: changed.length, filesSkipped: unchanged.length,
+    actionVersion: ACTION_VERSION,
+  });
 
   core.info('Done.');
 }
