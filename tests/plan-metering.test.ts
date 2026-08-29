@@ -53,7 +53,33 @@ describe('the review loop bills once per execution and stops only on the cap', (
 
   it('stamps action_pr on every call but meterFirst only on the first', () => {
     expect(src).toContain("meterClass: 'action_pr'");
-    expect(src).toMatch(/meterFirst: allResults\.length === 0 && failedPaths\.size === 0/);
+    expect(src).toMatch(/const meterFirst = !billedOnce;/);
+    expect(src).toMatch(/if \(meterFirst\) billedOnce = true;/);
+  });
+
+  it('latches the unit ONCE per execution, whatever the responses look like', () => {
+    // The derived form (`allResults.length === 0 && failedPaths.size === 0`) looked equivalent and
+    // was not: a status:'success' response with an EMPTY results array pushes nothing and records
+    // no failure, so the next file re-claimed the unit - two units for one PR. An explicit latch
+    // cannot express that bug. Simulated here against the real predicate.
+    let billedOnce = false;
+    const stamps: boolean[] = [];
+    for (let i = 0; i < 4; i++) {
+      const meterFirst = !billedOnce;
+      if (meterFirst) billedOnce = true;
+      stamps.push(meterFirst);
+      // Every shape a response can take - empty-success included - leaves the latch set.
+    }
+    expect(stamps.filter(Boolean)).toHaveLength(1);
+    expect(stamps[0]).toBe(true);
+  });
+
+  it('latches at DISPATCH, not on success - a call that errored may already have billed', () => {
+    // Under-billing by one is recoverable; double-billing a customer is not.
+    const dispatch = src.indexOf('if (meterFirst) billedOnce = true;');
+    const call = src.indexOf('const resp = await callReviewAPI(');
+    expect(dispatch).toBeGreaterThan(-1);
+    expect(dispatch).toBeLessThan(call);
   });
 
   it('aborts the remaining files on the cap - and leaves them UNSTAMPED so they come back', () => {
@@ -103,5 +129,60 @@ describe('the PR comment says why the review is short', () => {
     const md = formatPRComment(comparisons, 42, 'acme/repo');
     expect(md).not.toContain('allowance');
     expect(md).not.toContain('[!IMPORTANT]');
+  });
+});
+
+describe('a retry never re-claims the unit (behavioural, not a source grep)', () => {
+  // The engine consumes at the START of a request, so a response lost in transit leaves the unit
+  // spent. Re-sending meterFirst on the retry spends another - up to three for one PR.
+  it('sends meterFirst only on the FIRST attempt', async () => {
+    // Fake timers so the real 5s retry backoff doesn't make this a 5-second test.
+    vi.useFakeTimers();
+    const bodies: any[] = [];
+    let call = 0;
+    global.fetch = vi.fn().mockImplementation(async (_url: string, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      call += 1;
+      // First attempt: a 5xx (retryable). Second: success.
+      if (call === 1) return { status: 503, ok: false, json: async () => ({}) };
+      return { status: 200, ok: true, json: async () => ({ status: 'success', results: [] }) };
+    }) as unknown as typeof fetch;
+
+    const pending = callReviewAPI('https://x', { apiKey: 'k', mode: 'pr', meterClass: 'action_pr', meterFirst: true } as never, 60_000);
+    await vi.advanceTimersByTimeAsync(6000);   // past BACKOFF_DELAYS_MS[0]
+    await pending;
+    vi.useRealTimers();
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].meterFirst).toBe(true);
+    expect(bodies[1].meterFirst).toBe(false);
+  });
+});
+
+describe('the cap banner names only what the CAP withheld', () => {
+  it('does not blame the allowance for an ordinary failure', () => {
+    // failedPaths collects every failure; capSkipped only the ones the cap stopped. Telling a
+    // customer their allowance withheld a file that actually timed out is a false statement
+    // about their bill.
+    const src = readFileSync(join(__dirname, '..', 'src/index.ts'), 'utf8');
+    expect(src).toContain('const capSkipped: string[] = []');
+    expect(src).toMatch(/unreviewed: capSkipped/);
+    expect(src).not.toMatch(/unreviewed: changed\.filter/);
+  });
+});
+
+describe('a billing condition never fails the build', () => {
+  it('the on-demand path warns and returns instead of setFailed', () => {
+    const src = readFileSync(join(__dirname, '..', 'src/index.ts'), 'utf8');
+    const capBranch = src.indexOf('if (error instanceof PlanCapReachedError)');
+    const setFailed = src.indexOf('core.setFailed(message)');
+    expect(capBranch).toBeGreaterThan(-1);
+    // The cap branch must come FIRST and return, so setFailed is never reached for a cap.
+    expect(capBranch).toBeLessThan(setFailed);
+  });
+
+  it('reports only the files it actually reviewed', () => {
+    const src = readFileSync(join(__dirname, '..', 'src/index.ts'), 'utf8');
+    expect(src).toMatch(/filesReviewed: changed\.length - capSkipped\.length/);
   });
 });

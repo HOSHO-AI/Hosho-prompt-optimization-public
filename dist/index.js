@@ -70,11 +70,16 @@ async function callReviewAPI(apiUrl, request, timeoutMs = 600_000) {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
+        // A RETRY MUST NEVER RE-CLAIM THE UNIT. The engine consumes at the start of a request, so a
+        // response lost in transit (abort, socket hang-up, a 5xx after the work ran) leaves the unit
+        // already spent; re-sending `meterFirst` would spend a second one - up to three for a single
+        // PR. Only the first attempt carries the claim.
+        const attemptRequest = attempt === 0 ? request : { ...request, meterFirst: false };
         try {
             const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(request),
+                body: JSON.stringify(attemptRequest),
                 signal: controller.signal,
             });
             clearTimeout(timer);
@@ -1319,6 +1324,17 @@ async function run() {
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        // A BILLING condition must never fail a customer's build. The README promises exactly this,
+        // and the PR path already honours it (the loop stops and the comment explains); on-demand had
+        // no such handling, so an exhausted allowance would have turned the check red - the one
+        // outcome this whole design set out to avoid.
+        if (error instanceof api_client_1.PlanCapReachedError) {
+            core.warning(`Monthly allowance reached: ${message}`);
+            await core.summary
+                .addRaw(`## Hosho\n\n> [!IMPORTANT]\n> **Monthly allowance reached.** ${message}\n`)
+                .write();
+            return;
+        }
         core.setFailed(message);
     }
 }
@@ -1522,15 +1538,31 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     // UNREVIEWED and unstamped (see failedPaths below), so they come back for review on the next
     // push once the customer has upgraded or the month has rolled over.
     let capMessage = null;
+    // Has this EXECUTION already claimed its one PR-review unit? An explicit latch, not a condition
+    // derived from the result arrays: `allResults.length === 0 && failedPaths.size === 0` looked
+    // equivalent but was not - a response with status:'success' and an EMPTY results array pushes
+    // nothing and records no failure, so the next file re-claimed the unit and the customer was
+    // billed twice for one PR. Latched at DISPATCH rather than on success, because a call that
+    // errors after reaching the engine may already have been billed there: under-billing by one is
+    // recoverable, double-billing a customer is not.
+    let billedOnce = false;
+    // Files the CAP withheld - a strict subset of failedPaths, which also collects ordinary
+    // failures. The banner must name only these: telling a customer their allowance withheld a file
+    // that actually timed out is a false accusation about their bill.
+    const capSkipped = [];
     for (const file of changed) {
         if (capMessage) {
             // Allowance gone: stop calling. Every remaining file joins failedPaths so its content hash
             // is not stamped - reviewing 29 of 30 files and silently marking the 30th as done would
             // hide a real gap in the review.
             failedPaths.add(file.path);
+            capSkipped.push(file.path);
             continue;
         }
         core.info(`  → ${file.name} (${allResults.length + 1}/${changed.length})...`);
+        const meterFirst = !billedOnce;
+        if (meterFirst)
+            billedOnce = true;
         try {
             const resp = await (0, api_client_1.callReviewAPI)(apiUrl, {
                 apiKey,
@@ -1547,7 +1579,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 // One PR review per EXECUTION, not per file: this loop calls the engine once per changed
                 // file, so only the first call carries the unit. A 30-file PR is one PR review.
                 meterClass: 'action_pr',
-                meterFirst: allResults.length === 0 && failedPaths.size === 0,
+                meterFirst,
             }, timeoutMs);
             if (resp.status !== 'success' || !resp.results) {
                 errors.push(`${file.name}: ${resp.message || 'Unknown API error'}`);
@@ -1569,6 +1601,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
             if (error instanceof api_client_1.PlanCapReachedError) {
                 capMessage = msg;
                 failedPaths.add(file.path);
+                capSkipped.push(file.path);
                 core.warning(`Monthly PR-review allowance reached: ${msg}`);
                 continue;
             }
@@ -1663,9 +1696,7 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         carried: carriedSections,
         hashes: stateHashes,
     };
-    const capForComment = capMessage
-        ? { message: capMessage, unreviewed: changed.filter(f => failedPaths.has(f.path)).map(f => f.path) }
-        : undefined;
+    const capForComment = capMessage ? { message: capMessage, unreviewed: capSkipped } : undefined;
     const commentBody = outputMode === 'review'
         ? (0, output_formatter_1.formatReviewComment)(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment)
         : (0, output_formatter_1.formatPRComment)(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment);
@@ -1685,8 +1716,16 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     // content-hash dedupe is earning its keep.
     await (0, api_client_1.sendBotEvent)(apiUrl, apiKey, {
         repository: repoFullName, prNumber: pullNumber, event: triggerName(),
-        filesTotal: apiFiles.length, filesReviewed: changed.length, filesSkipped: unchanged.length,
+        // filesReviewed counts what was ACTUALLY reviewed, not what we set out to review: on a capped
+        // run the files after the cap were never sent, and counting them would overstate both the
+        // spend ledger and the operator's per-key usage view (which sums this very column).
+        filesTotal: apiFiles.length,
+        filesReviewed: changed.length - capSkipped.length,
+        filesSkipped: unchanged.length,
         actionVersion: ACTION_VERSION,
+        // Why a run reviewed fewer files than it found - otherwise a capped run is indistinguishable
+        // from a quiet one in every dashboard downstream.
+        ...(capMessage ? { capBlocked: true } : {}),
         // Comment health. `stateEntries < filesTotal` means the comment truncated and a file lost its
         // dedupe state — which then re-bills on every push, permanently. Measured on four live PRs.
         commentBytes: commentBody.length,
@@ -1710,6 +1749,11 @@ async function runOnDemandMode(apiKey, apiUrl, promptFile, systemOverview, timeo
     const apiResponse = await (0, api_client_1.callReviewAPI)(apiUrl, {
         apiKey,
         mode: 'on-demand',
+        // A manual (workflow_dispatch) run reviews one prompt on demand - it is a REVIEW RUN, not a
+        // PR review, and draws the review pool. That is what the engine's unstamped fallback already
+        // concluded from outputMode; stamping it makes the intent explicit rather than incidental,
+        // and stops a future fallback change from silently re-pointing it at the PR pool.
+        meterClass: 'run',
         systemOverview: systemOverview || undefined,
         files: [{
                 path: promptFile,
