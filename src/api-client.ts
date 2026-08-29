@@ -28,6 +28,14 @@ export interface ReviewAPIRequest {
   metadata?: { repository?: string; prNumber?: number; prTitle?: string; prDescription?: string; prFileSummary?: string };
   /** Caller identity stamped onto every cx.llm_costs row the request produces. */
   telemetry?: { callerKind?: string; clientName?: string; clientVersion?: string; runKind?: string; branch?: string };
+  /**
+   * What this call costs the customer's monthly allowance. 'action_pr' = a PR review, billed
+   * ONCE PER EXECUTION rather than per file: `meterFirst` is true only on the first file's call,
+   * so a 30-file PR is one PR review. Old pinned versions of this Action send neither field and
+   * remain unmetered - upgrading is what starts the counting, never a surprise bill.
+   */
+  meterClass?: 'action_pr';
+  meterFirst?: boolean;
 }
 
 export interface ReviewFileResult {
@@ -47,6 +55,23 @@ export interface ReviewAPIResponse {
   status: 'success' | 'error';
   results?: ReviewFileResult[];
   message?: string;
+}
+
+/**
+ * The monthly plan allowance is exhausted. Distinct from every other 4xx because it is the ONE
+ * failure where continuing to the next file is wrong: the allowance is gone for the whole run.
+ *
+ * ⚠ IT IS NOT DETECTED BY STATUS CODE. The engine's per-key rate limiter also answers 429, is
+ * live and enforcing, and a rate-limit blip must keep today's warn-and-continue behaviour - a
+ * paying customer's PR review must not stop, and must never be shown an upgrade banner, because
+ * their CI was briefly too fast. The cap sets `upgrade: true` in the body; nothing else does.
+ */
+export class PlanCapReachedError extends Error {
+  readonly isPlanCap = true;
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlanCapReachedError';
+  }
 }
 
 export async function callReviewAPI(
@@ -73,7 +98,11 @@ export async function callReviewAPI(
       // Don't retry 4xx — auth/validation errors won't self-heal
       if (response.status >= 400 && response.status < 500) {
         const data = await response.json().catch(() => ({}));
-        throw new Error((data as any).message || `API error: ${response.status}`);
+        const message = (data as any).message || `API error: ${response.status}`;
+        // The plan cap, and ONLY the plan cap (see PlanCapReachedError): keyed on the body's
+        // `upgrade` flag, never on the 429 status the rate limiter shares.
+        if ((data as any).upgrade === true) throw new PlanCapReachedError(message);
+        throw new Error(message);
       }
 
       // Retry 5xx — server/Lambda transient errors

@@ -25,7 +25,9 @@ For every factor that isn't green, you get specific findings — what's missing,
 
 ### 1. Get your API key
 
-Create one yourself at [editor.hoshoai.com/setup/git](https://editor.hoshoai.com/setup/git) — sign in with Google and click **Create my key**. It's free, instant, and the same `pfr_...` key also works for the [Hosho MCP](https://editor.hoshoai.com/setup/mcp).
+Create one yourself at [editor.hoshoai.com/setup/git](https://editor.hoshoai.com/setup/git) — sign in with Google and click **Create my key**. It's instant, and the same `pfr_...` key also works for the [Hosho MCP](https://editor.hoshoai.com/setup/mcp).
+
+Your key starts on the **Free plan**: 50 PR reviews a month (one per pull request, however many prompt files it touches) plus 20 full review runs in the editor and the MCP. When a run exhausts the monthly allowance, the Action posts a note on the PR and reviews the remaining files on your next push once the allowance resets — the check never fails because of it. See [plans](https://editor.hoshoai.com/pricing).
 
 (Prefer a human? [otto@hoshoai.com](mailto:otto@hoshoai.com) works too.)
 
