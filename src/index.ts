@@ -11,7 +11,7 @@ import {
   AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, evaluateReferenceConvention,
   resolveMergeBase,
 } from './file-fetcher';
-import { callReviewAPI, sendBotEvent, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
+import { callReviewAPI, sendBotEvent, PlanCapReachedError, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
 import {
   formatPRComment,
   formatReviewComment,
@@ -25,7 +25,7 @@ import { readPriorState, partitionByHash, parseStateBlock } from './review-state
 
 // Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
 // inferred from behaviour. Bump on release alongside the git tag.
-const ACTION_VERSION = 'v1.45.0';
+const ACTION_VERSION = 'v1.46.0';
 
 /**
  * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.
@@ -477,8 +477,19 @@ async function runPRMode(
   // one for a file we never reviewed makes every future push SKIP it — silently withholding a review
   // the customer should have had, which is the one thing this whole change set must never do.
   const failedPaths = new Set<string>();
+  // Set when the monthly PR-review allowance runs out mid-loop. The remaining files are left
+  // UNREVIEWED and unstamped (see failedPaths below), so they come back for review on the next
+  // push once the customer has upgraded or the month has rolled over.
+  let capMessage: string | null = null;
 
   for (const file of changed) {
+    if (capMessage) {
+      // Allowance gone: stop calling. Every remaining file joins failedPaths so its content hash
+      // is not stamped - reviewing 29 of 30 files and silently marking the 30th as done would
+      // hide a real gap in the review.
+      failedPaths.add(file.path);
+      continue;
+    }
     core.info(`  → ${file.name} (${allResults.length + 1}/${changed.length})...`);
     try {
       const resp = await callReviewAPI(apiUrl, {
@@ -493,6 +504,10 @@ async function runPRMode(
         // null and cannot be told apart from an MCP agent's in the by-caller breakdowns — which is
         // how "is this the bot or a customer's script?" became a week-long question in the first place.
         telemetry: { callerKind: 'bot', clientName: 'hosho-action', clientVersion: ACTION_VERSION },
+        // One PR review per EXECUTION, not per file: this loop calls the engine once per changed
+        // file, so only the first call carries the unit. A 30-file PR is one PR review.
+        meterClass: 'action_pr',
+        meterFirst: allResults.length === 0 && failedPaths.size === 0,
       }, timeoutMs);
 
       if (resp.status !== 'success' || !resp.results) {
@@ -508,6 +523,15 @@ async function runPRMode(
       core.info(`  ✓ ${file.name} done${modelInfo}`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
+      // The allowance, not a failure: stop the loop and say so in the PR rather than burying it
+      // in the Actions log. Everything else keeps the warn-and-continue behaviour - a rate-limit
+      // blip or one bad file must never stop a review that can still finish.
+      if (error instanceof PlanCapReachedError) {
+        capMessage = msg;
+        failedPaths.add(file.path);
+        core.warning(`Monthly PR-review allowance reached: ${msg}`);
+        continue;
+      }
       errors.push(`${file.name}: ${msg}`);
       failedPaths.add(file.path);
       core.warning(`Failed to review ${file.name}: ${msg}. Skipping.`);
@@ -602,9 +626,12 @@ async function runPRMode(
     carried: carriedSections,
     hashes: stateHashes,
   };
+  const capForComment = capMessage
+    ? { message: capMessage, unreviewed: changed.filter(f => failedPaths.has(f.path)).map(f => f.path) }
+    : undefined;
   const commentBody = outputMode === 'review'
-    ? formatReviewComment(comparisons, pullNumber, repoFullName, bundledByFile, carry)
-    : formatPRComment(comparisons, pullNumber, repoFullName, bundledByFile, carry);
+    ? formatReviewComment(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment)
+    : formatPRComment(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment);
   await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
 
   // Step 6: Write Job Summary

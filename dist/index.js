@@ -40,7 +40,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DEFAULT_API_URL = void 0;
+exports.PlanCapReachedError = exports.DEFAULT_API_URL = void 0;
 exports.callReviewAPI = callReviewAPI;
 exports.sendBotEvent = sendBotEvent;
 const core = __importStar(__nccwpck_require__(7484));
@@ -48,6 +48,23 @@ const DEFAULT_API_URL = 'https://2pdp5lkd4g5a4hi3aigcdxighe0ebgjy.lambda-url.us-
 exports.DEFAULT_API_URL = DEFAULT_API_URL;
 const MAX_RETRIES = 3;
 const BACKOFF_DELAYS_MS = [5000, 10000, 20000]; // 5s, 10s, 20s
+/**
+ * The monthly plan allowance is exhausted. Distinct from every other 4xx because it is the ONE
+ * failure where continuing to the next file is wrong: the allowance is gone for the whole run.
+ *
+ * ⚠ IT IS NOT DETECTED BY STATUS CODE. The engine's per-key rate limiter also answers 429, is
+ * live and enforcing, and a rate-limit blip must keep today's warn-and-continue behaviour - a
+ * paying customer's PR review must not stop, and must never be shown an upgrade banner, because
+ * their CI was briefly too fast. The cap sets `upgrade: true` in the body; nothing else does.
+ */
+class PlanCapReachedError extends Error {
+    isPlanCap = true;
+    constructor(message) {
+        super(message);
+        this.name = 'PlanCapReachedError';
+    }
+}
+exports.PlanCapReachedError = PlanCapReachedError;
 async function callReviewAPI(apiUrl, request, timeoutMs = 600_000) {
     let lastError = null;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -64,7 +81,12 @@ async function callReviewAPI(apiUrl, request, timeoutMs = 600_000) {
             // Don't retry 4xx — auth/validation errors won't self-heal
             if (response.status >= 400 && response.status < 500) {
                 const data = await response.json().catch(() => ({}));
-                throw new Error(data.message || `API error: ${response.status}`);
+                const message = data.message || `API error: ${response.status}`;
+                // The plan cap, and ONLY the plan cap (see PlanCapReachedError): keyed on the body's
+                // `upgrade` flag, never on the 429 status the rate limiter shares.
+                if (data.upgrade === true)
+                    throw new PlanCapReachedError(message);
+                throw new Error(message);
             }
             // Retry 5xx — server/Lambda transient errors
             if (response.status >= 500) {
@@ -1106,7 +1128,7 @@ const output_formatter_1 = __nccwpck_require__(1061);
 const review_state_1 = __nccwpck_require__(2279);
 // Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
 // inferred from behaviour. Bump on release alongside the git tag.
-const ACTION_VERSION = 'v1.45.0';
+const ACTION_VERSION = 'v1.46.0';
 /**
  * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.
  *
@@ -1496,7 +1518,18 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
     // one for a file we never reviewed makes every future push SKIP it — silently withholding a review
     // the customer should have had, which is the one thing this whole change set must never do.
     const failedPaths = new Set();
+    // Set when the monthly PR-review allowance runs out mid-loop. The remaining files are left
+    // UNREVIEWED and unstamped (see failedPaths below), so they come back for review on the next
+    // push once the customer has upgraded or the month has rolled over.
+    let capMessage = null;
     for (const file of changed) {
+        if (capMessage) {
+            // Allowance gone: stop calling. Every remaining file joins failedPaths so its content hash
+            // is not stamped - reviewing 29 of 30 files and silently marking the 30th as done would
+            // hide a real gap in the review.
+            failedPaths.add(file.path);
+            continue;
+        }
         core.info(`  → ${file.name} (${allResults.length + 1}/${changed.length})...`);
         try {
             const resp = await (0, api_client_1.callReviewAPI)(apiUrl, {
@@ -1511,6 +1544,10 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
                 // null and cannot be told apart from an MCP agent's in the by-caller breakdowns — which is
                 // how "is this the bot or a customer's script?" became a week-long question in the first place.
                 telemetry: { callerKind: 'bot', clientName: 'hosho-action', clientVersion: ACTION_VERSION },
+                // One PR review per EXECUTION, not per file: this loop calls the engine once per changed
+                // file, so only the first call carries the unit. A 30-file PR is one PR review.
+                meterClass: 'action_pr',
+                meterFirst: allResults.length === 0 && failedPaths.size === 0,
             }, timeoutMs);
             if (resp.status !== 'success' || !resp.results) {
                 errors.push(`${file.name}: ${resp.message || 'Unknown API error'}`);
@@ -1526,6 +1563,15 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         }
         catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
+            // The allowance, not a failure: stop the loop and say so in the PR rather than burying it
+            // in the Actions log. Everything else keeps the warn-and-continue behaviour - a rate-limit
+            // blip or one bad file must never stop a review that can still finish.
+            if (error instanceof api_client_1.PlanCapReachedError) {
+                capMessage = msg;
+                failedPaths.add(file.path);
+                core.warning(`Monthly PR-review allowance reached: ${msg}`);
+                continue;
+            }
             errors.push(`${file.name}: ${msg}`);
             failedPaths.add(file.path);
             core.warning(`Failed to review ${file.name}: ${msg}. Skipping.`);
@@ -1617,9 +1663,12 @@ async function runPRMode(apiKey, apiUrl, filePattern, promptPath, systemOverview
         carried: carriedSections,
         hashes: stateHashes,
     };
+    const capForComment = capMessage
+        ? { message: capMessage, unreviewed: changed.filter(f => failedPaths.has(f.path)).map(f => f.path) }
+        : undefined;
     const commentBody = outputMode === 'review'
-        ? (0, output_formatter_1.formatReviewComment)(comparisons, pullNumber, repoFullName, bundledByFile, carry)
-        : (0, output_formatter_1.formatPRComment)(comparisons, pullNumber, repoFullName, bundledByFile, carry);
+        ? (0, output_formatter_1.formatReviewComment)(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment)
+        : (0, output_formatter_1.formatPRComment)(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment);
     await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
     // Step 6: Write Job Summary
     core.info('Writing Job Summary...');
@@ -2073,13 +2122,28 @@ function formatHeader(filename, _description, _targetModelFamily, _targetModelNa
     let md = `${title}\n\n`;
     return md;
 }
-function formatScopeHeader(comparisons, prNumber, repoFullName, carry) {
+/**
+ * The monthly PR-review allowance ran out mid-run. Rendered at the TOP of the comment, because
+ * the reader's first question is "why is this review incomplete?" and the answer must not be
+ * buried in the Actions log where only a maintainer would find it.
+ */
+function formatCapBanner(capMessage, unreviewed) {
+    if (!capMessage)
+        return '';
+    const files = unreviewed?.length
+        ? `\n\nNot reviewed this run: ${unreviewed.map(p => `\`${p}\``).join(', ')}. ` +
+            `They will be reviewed automatically on the next push once the allowance resets or the plan is upgraded.`
+        : '';
+    return `> [!IMPORTANT]\n> **Monthly PR-review allowance reached.** ${capMessage}${files}\n\n`;
+}
+function formatScopeHeader(comparisons, prNumber, repoFullName, carry, capMessage, unreviewed) {
     // On a partial (deduped) run only the CHANGED files have fresh comparisons, but the comment still
     // shows every file — so the header counts `carry.order`, not the fresh set.
     const paths = carry?.order ?? comparisons.map(c => c.promptFile);
     const fileCount = paths.length;
     const fileList = paths.map(pth => `\`${pth}\``).join(', ');
     let md = `## Hosho PR Review: ${repoFullName}#${prNumber}\n\n`;
+    md += formatCapBanner(capMessage, unreviewed);
     if (fileCount === 1) {
         // `fileCount` counts carry.order (every file in the PR), which is NOT the same set as
         // `comparisons` (only the files freshly reviewed this run). They diverge whenever a file is
@@ -2603,9 +2667,9 @@ function composeComment(header, sections, footer, stateBlock) {
     const out = body();
     return out.length > PR_COMMENT_MAX_LENGTH ? out.slice(0, PR_COMMENT_MAX_LENGTH) : out;
 }
-function formatPRComment(comparisons, prNumber, repoFullName = '', bundledByFile, carry) {
+function formatPRComment(comparisons, prNumber, repoFullName = '', bundledByFile, carry, cap) {
     const sections = buildSections(comparisons, prNumber, formatPRFileSection, carry);
-    return composeComment(formatScopeHeader(comparisons, prNumber, repoFullName, carry), sections, `${formatBundledFooter(bundledByFile)}\n*Hosho Bot*\n`, (0, review_state_1.renderStateBlock)(stateFor(sections)));
+    return composeComment(formatScopeHeader(comparisons, prNumber, repoFullName, carry, cap?.message, cap?.unreviewed), sections, `${formatBundledFooter(bundledByFile)}\n*Hosho Bot*\n`, (0, review_state_1.renderStateBlock)(stateFor(sections)));
 }
 function formatJobSummary(comparisons, prNumber, repoFullName = '', bundledByFile) {
     let md = '';
@@ -2631,9 +2695,9 @@ function formatReviewFileSection(comp, prNumber, isMultiFile) {
     md += formatRevertSection(comp.changeSummary);
     return md;
 }
-function formatReviewComment(comparisons, prNumber, repoFullName = '', bundledByFile, carry) {
+function formatReviewComment(comparisons, prNumber, repoFullName = '', bundledByFile, carry, cap) {
     const sections = buildSections(comparisons, prNumber, formatReviewFileSection, carry);
-    return composeComment(formatScopeHeader(comparisons, prNumber, repoFullName, carry), sections, `${formatBundledFooter(bundledByFile)}` +
+    return composeComment(formatScopeHeader(comparisons, prNumber, repoFullName, carry, cap?.message, cap?.unreviewed), sections, `${formatBundledFooter(bundledByFile)}` +
         `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n` +
         `*Hosho Bot*\n`, (0, review_state_1.renderStateBlock)(stateFor(sections)));
 }

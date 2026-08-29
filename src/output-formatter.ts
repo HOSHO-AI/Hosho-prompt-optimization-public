@@ -223,11 +223,27 @@ function formatHeader(
   return md;
 }
 
+/**
+ * The monthly PR-review allowance ran out mid-run. Rendered at the TOP of the comment, because
+ * the reader's first question is "why is this review incomplete?" and the answer must not be
+ * buried in the Actions log where only a maintainer would find it.
+ */
+function formatCapBanner(capMessage?: string, unreviewed?: string[]): string {
+  if (!capMessage) return '';
+  const files = unreviewed?.length
+    ? `\n\nNot reviewed this run: ${unreviewed.map(p => `\`${p}\``).join(', ')}. ` +
+      `They will be reviewed automatically on the next push once the allowance resets or the plan is upgraded.`
+    : '';
+  return `> [!IMPORTANT]\n> **Monthly PR-review allowance reached.** ${capMessage}${files}\n\n`;
+}
+
 function formatScopeHeader(
   comparisons: ComparisonResult[],
   prNumber: number,
   repoFullName: string,
   carry?: SectionCarry,
+  capMessage?: string,
+  unreviewed?: string[],
 ): string {
   // On a partial (deduped) run only the CHANGED files have fresh comparisons, but the comment still
   // shows every file — so the header counts `carry.order`, not the fresh set.
@@ -236,6 +252,7 @@ function formatScopeHeader(
   const fileList = paths.map(pth => `\`${pth}\``).join(', ');
 
   let md = `## Hosho PR Review: ${repoFullName}#${prNumber}\n\n`;
+  md += formatCapBanner(capMessage, unreviewed);
 
   if (fileCount === 1) {
     // `fileCount` counts carry.order (every file in the PR), which is NOT the same set as
@@ -855,10 +872,11 @@ export function formatPRComment(
   repoFullName: string = '',
   bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
   carry?: SectionCarry,
+  cap?: { message: string; unreviewed: string[] },
 ): string {
   const sections = buildSections(comparisons, prNumber, formatPRFileSection, carry);
   return composeComment(
-    formatScopeHeader(comparisons, prNumber, repoFullName, carry),
+    formatScopeHeader(comparisons, prNumber, repoFullName, carry, cap?.message, cap?.unreviewed),
     sections,
     `${formatBundledFooter(bundledByFile)}\n*Hosho Bot*\n`,
     renderStateBlock(stateFor(sections)),
@@ -908,10 +926,11 @@ export function formatReviewComment(
   repoFullName: string = '',
   bundledByFile?: Map<string, { skills: string[]; siblings: string[] }>,
   carry?: SectionCarry,
+  cap?: { message: string; unreviewed: string[] },
 ): string {
   const sections = buildSections(comparisons, prNumber, formatReviewFileSection, carry);
   return composeComment(
-    formatScopeHeader(comparisons, prNumber, repoFullName, carry),
+    formatScopeHeader(comparisons, prNumber, repoFullName, carry, cap?.message, cap?.unreviewed),
     sections,
     `${formatBundledFooter(bundledByFile)}` +
       `\n<p align="center">Comment <code>/hosho-improve</code> for full scoring and improvement suggestions beyond this PR.</p>\n\n` +
