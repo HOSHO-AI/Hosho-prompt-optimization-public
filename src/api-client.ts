@@ -34,7 +34,7 @@ export interface ReviewAPIRequest {
    * so a 30-file PR is one PR review. Old pinned versions of this Action send neither field and
    * remain unmetered - upgrading is what starts the counting, never a surprise bill.
    */
-  meterClass?: 'action_pr';
+  meterClass?: 'action_pr' | 'run';
   meterFirst?: boolean;
 }
 
@@ -85,11 +85,17 @@ export async function callReviewAPI(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+    // A RETRY MUST NEVER RE-CLAIM THE UNIT. The engine consumes at the start of a request, so a
+    // response lost in transit (abort, socket hang-up, a 5xx after the work ran) leaves the unit
+    // already spent; re-sending `meterFirst` would spend a second one - up to three for a single
+    // PR. Only the first attempt carries the claim.
+    const attemptRequest = attempt === 0 ? request : { ...request, meterFirst: false };
+
     try {
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
+        body: JSON.stringify(attemptRequest),
         signal: controller.signal,
       });
 
@@ -181,6 +187,8 @@ export async function sendBotEvent(
     filesReviewed: number;
     filesSkipped: number;
     actionVersion?: string;
+    /** The monthly PR-review allowance stopped this run part-way. */
+    capBlocked?: boolean;
     skippedEntirely?: boolean;
     commentBytes?: number;
     stateEntries?: number;

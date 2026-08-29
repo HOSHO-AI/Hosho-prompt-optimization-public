@@ -227,6 +227,17 @@ async function run(): Promise<void> {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // A BILLING condition must never fail a customer's build. The README promises exactly this,
+    // and the PR path already honours it (the loop stops and the comment explains); on-demand had
+    // no such handling, so an exhausted allowance would have turned the check red - the one
+    // outcome this whole design set out to avoid.
+    if (error instanceof PlanCapReachedError) {
+      core.warning(`Monthly allowance reached: ${message}`);
+      await core.summary
+        .addRaw(`## Hosho\n\n> [!IMPORTANT]\n> **Monthly allowance reached.** ${message}\n`)
+        .write();
+      return;
+    }
     core.setFailed(message);
   }
 }
@@ -489,6 +500,10 @@ async function runPRMode(
   // errors after reaching the engine may already have been billed there: under-billing by one is
   // recoverable, double-billing a customer is not.
   let billedOnce = false;
+  // Files the CAP withheld - a strict subset of failedPaths, which also collects ordinary
+  // failures. The banner must name only these: telling a customer their allowance withheld a file
+  // that actually timed out is a false accusation about their bill.
+  const capSkipped: string[] = [];
 
   for (const file of changed) {
     if (capMessage) {
@@ -496,6 +511,7 @@ async function runPRMode(
       // is not stamped - reviewing 29 of 30 files and silently marking the 30th as done would
       // hide a real gap in the review.
       failedPaths.add(file.path);
+      capSkipped.push(file.path);
       continue;
     }
     core.info(`  → ${file.name} (${allResults.length + 1}/${changed.length})...`);
@@ -539,6 +555,7 @@ async function runPRMode(
       if (error instanceof PlanCapReachedError) {
         capMessage = msg;
         failedPaths.add(file.path);
+        capSkipped.push(file.path);
         core.warning(`Monthly PR-review allowance reached: ${msg}`);
         continue;
       }
@@ -636,9 +653,7 @@ async function runPRMode(
     carried: carriedSections,
     hashes: stateHashes,
   };
-  const capForComment = capMessage
-    ? { message: capMessage, unreviewed: changed.filter(f => failedPaths.has(f.path)).map(f => f.path) }
-    : undefined;
+  const capForComment = capMessage ? { message: capMessage, unreviewed: capSkipped } : undefined;
   const commentBody = outputMode === 'review'
     ? formatReviewComment(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment)
     : formatPRComment(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment);
@@ -661,8 +676,16 @@ async function runPRMode(
   // content-hash dedupe is earning its keep.
   await sendBotEvent(apiUrl, apiKey, {
     repository: repoFullName, prNumber: pullNumber, event: triggerName(),
-    filesTotal: apiFiles.length, filesReviewed: changed.length, filesSkipped: unchanged.length,
+    // filesReviewed counts what was ACTUALLY reviewed, not what we set out to review: on a capped
+    // run the files after the cap were never sent, and counting them would overstate both the
+    // spend ledger and the operator's per-key usage view (which sums this very column).
+    filesTotal: apiFiles.length,
+    filesReviewed: changed.length - capSkipped.length,
+    filesSkipped: unchanged.length,
     actionVersion: ACTION_VERSION,
+    // Why a run reviewed fewer files than it found - otherwise a capped run is indistinguishable
+    // from a quiet one in every dashboard downstream.
+    ...(capMessage ? { capBlocked: true } : {}),
     // Comment health. `stateEntries < filesTotal` means the comment truncated and a file lost its
     // dedupe state — which then re-bills on every push, permanently. Measured on four live PRs.
     commentBytes: commentBody.length,
@@ -699,6 +722,11 @@ async function runOnDemandMode(
   const apiResponse = await callReviewAPI(apiUrl, {
     apiKey,
     mode: 'on-demand',
+    // A manual (workflow_dispatch) run reviews one prompt on demand - it is a REVIEW RUN, not a
+    // PR review, and draws the review pool. That is what the engine's unstamped fallback already
+    // concluded from outputMode; stamping it makes the intent explicit rather than incidental,
+    // and stops a future fallback change from silently re-pointing it at the PR pool.
+    meterClass: 'run',
     systemOverview: systemOverview || undefined,
     files: [{
       path: promptFile,
