@@ -481,6 +481,14 @@ async function runPRMode(
   // UNREVIEWED and unstamped (see failedPaths below), so they come back for review on the next
   // push once the customer has upgraded or the month has rolled over.
   let capMessage: string | null = null;
+  // Has this EXECUTION already claimed its one PR-review unit? An explicit latch, not a condition
+  // derived from the result arrays: `allResults.length === 0 && failedPaths.size === 0` looked
+  // equivalent but was not - a response with status:'success' and an EMPTY results array pushes
+  // nothing and records no failure, so the next file re-claimed the unit and the customer was
+  // billed twice for one PR. Latched at DISPATCH rather than on success, because a call that
+  // errors after reaching the engine may already have been billed there: under-billing by one is
+  // recoverable, double-billing a customer is not.
+  let billedOnce = false;
 
   for (const file of changed) {
     if (capMessage) {
@@ -491,6 +499,8 @@ async function runPRMode(
       continue;
     }
     core.info(`  → ${file.name} (${allResults.length + 1}/${changed.length})...`);
+    const meterFirst = !billedOnce;
+    if (meterFirst) billedOnce = true;
     try {
       const resp = await callReviewAPI(apiUrl, {
         apiKey,
@@ -507,7 +517,7 @@ async function runPRMode(
         // One PR review per EXECUTION, not per file: this loop calls the engine once per changed
         // file, so only the first call carries the unit. A 30-file PR is one PR review.
         meterClass: 'action_pr',
-        meterFirst: allResults.length === 0 && failedPaths.size === 0,
+        meterFirst,
       }, timeoutMs);
 
       if (resp.status !== 'success' || !resp.results) {

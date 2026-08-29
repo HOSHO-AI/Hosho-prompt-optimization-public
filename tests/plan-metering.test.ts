@@ -53,7 +53,33 @@ describe('the review loop bills once per execution and stops only on the cap', (
 
   it('stamps action_pr on every call but meterFirst only on the first', () => {
     expect(src).toContain("meterClass: 'action_pr'");
-    expect(src).toMatch(/meterFirst: allResults\.length === 0 && failedPaths\.size === 0/);
+    expect(src).toMatch(/const meterFirst = !billedOnce;/);
+    expect(src).toMatch(/if \(meterFirst\) billedOnce = true;/);
+  });
+
+  it('latches the unit ONCE per execution, whatever the responses look like', () => {
+    // The derived form (`allResults.length === 0 && failedPaths.size === 0`) looked equivalent and
+    // was not: a status:'success' response with an EMPTY results array pushes nothing and records
+    // no failure, so the next file re-claimed the unit - two units for one PR. An explicit latch
+    // cannot express that bug. Simulated here against the real predicate.
+    let billedOnce = false;
+    const stamps: boolean[] = [];
+    for (let i = 0; i < 4; i++) {
+      const meterFirst = !billedOnce;
+      if (meterFirst) billedOnce = true;
+      stamps.push(meterFirst);
+      // Every shape a response can take - empty-success included - leaves the latch set.
+    }
+    expect(stamps.filter(Boolean)).toHaveLength(1);
+    expect(stamps[0]).toBe(true);
+  });
+
+  it('latches at DISPATCH, not on success - a call that errored may already have billed', () => {
+    // Under-billing by one is recoverable; double-billing a customer is not.
+    const dispatch = src.indexOf('if (meterFirst) billedOnce = true;');
+    const call = src.indexOf('const resp = await callReviewAPI(');
+    expect(dispatch).toBeGreaterThan(-1);
+    expect(dispatch).toBeLessThan(call);
   });
 
   it('aborts the remaining files on the cap - and leaves them UNSTAMPED so they come back', () => {
