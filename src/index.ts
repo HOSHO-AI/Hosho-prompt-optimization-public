@@ -25,7 +25,7 @@ import { readPriorState, partitionByHash, parseStateBlock } from './review-state
 
 // Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
 // inferred from behaviour. Bump on release alongside the git tag.
-const ACTION_VERSION = 'v1.46.0';
+const ACTION_VERSION = 'v1.47.0';
 
 /**
  * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.

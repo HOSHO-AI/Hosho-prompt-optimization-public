@@ -1133,7 +1133,7 @@ const output_formatter_1 = __nccwpck_require__(1061);
 const review_state_1 = __nccwpck_require__(2279);
 // Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
 // inferred from behaviour. Bump on release alongside the git tag.
-const ACTION_VERSION = 'v1.46.0';
+const ACTION_VERSION = 'v1.47.0';
 /**
  * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.
  *
