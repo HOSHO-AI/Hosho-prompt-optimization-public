@@ -4,18 +4,16 @@ Evaluates your AI agent prompts against research-backed prompt engineering best 
 
 ## How It Works
 
-Your prompts are evaluated across 6 quality factors drawn from prompt engineering research and model-provider guidelines (Claude, GPT, Gemini). Each factor is rated green, yellow, or red so you can see at a glance where to focus:
+Your prompts are evaluated across four macro factors drawn from prompt engineering research and model-provider guidelines, each broken into named sub-factors. Every factor is rated green, yellow, or red so you can see at a glance where to focus:
 
-| Factor | What It Checks |
-|--------|---------------|
-| Scope | Single clear goal, tightly coupled tasks |
-| Structure & Flow | Logical sections, information density, delimiters |
-| Context & Guidance | Goals, inputs, examples, chain-of-thought |
-| Constraints | Boundaries, priority handling, positive framing |
-| Output Validation | Format spec, validation steps, substance checks |
-| Model-Specific Prompting | Alignment with Claude, GPT, and Gemini best practices |
+| Macro factor | What it asks | Sub-factors |
+|--------------|--------------|-------------|
+| Scope | Is the prompt one job, sized for one agent? | Focus · Volume |
+| Structure | Is it organized so a model can follow it? | Layout · Tools & skills · Provider fit · Output & validation |
+| Guidance | Does it say what to achieve, what it will be given, and how to reason? | Goal · Inputs · Method & reasoning |
+| Coherence | Does it hold together — unambiguous, decidable, consistent, no dead weight? | Clarity · Criteria · Consistency · Bloat |
 
-For every factor that isn't green, you get specific findings — what's missing, a snippet from your prompt, and a proposed fix you can drop in.
+For every factor that isn't green, you get specific findings — what's missing, a snippet from your prompt, and a proposed fix you can drop in. The provider-fit checks are tuned per model family (Claude, GPT, Gemini, DeepSeek, Qwen, Kimi, GLM) and per class (standard vs reasoning) — see [docs/models-config.md](docs/models-config.md).
 
 **PR mode** automatically posts a review summary on your pull request — verdict, what changed, and suggested fixes. For detailed scoring and improvement suggestions, comment `/hosho-improve` on the PR. **On-demand mode** writes full results to the Job Summary in the Actions tab.
 
@@ -229,6 +227,11 @@ On-demand mode is already included in the workflow above via the `workflow_dispa
 | `prompt_path` | No | `''` | Directory prefix for identifying prompt files in PRs (e.g. `prompts/`). Alternative to `file_pattern` |
 | `system_overview` | No | `''` | Path to a system overview markdown file |
 | `custom_principles` | No | `''` | Path to a markdown file with team-specific prompt review principles |
+| `models_config` | No | `''` | Path to your models table (default location `.github/hosho/models.md`) — which model each prompt runs on. See [docs/models-config.md](docs/models-config.md) |
+| `skills_dir` | No | `''` | Directory (or newline-separated directories) of skill files. Backticked skill tokens in a prompt that resolve to `<skills_dir>/<name>/SKILL.md` or `<skills_dir>/<name>.md` are bundled as review context, so a prompt is reviewed with the skills it actually runs with |
+| `bundle_siblings` | No | `false` | Bundle sibling prompt/addendum files from the same directory into the review context |
+| `assembly_config` | No | `''` | Path to an assembly config (e.g. `.github/hosho/assembly.yml`) declaring shared references to inject when a prompt mentions them (`inject_when_referenced`) and references a prompt must contain (`require_reference`, severity `critical` or `suggestion`) |
+| `dedupe` | No | `true` | Skip re-reviewing files whose content is unchanged since the last review on the PR. Pushes re-fire the workflow against the PR's whole diff, so this is what keeps a busy PR from re-billing — turn it off only to force full re-reviews |
 | `api_url` | No | Built-in | API endpoint URL — override for enterprise/self-hosted deployments |
 | `timeout` | No | `600` | API call timeout in seconds |
 | `pr_number` | No | `''` | PR number — set automatically when using slash commands (see workflow above) |
