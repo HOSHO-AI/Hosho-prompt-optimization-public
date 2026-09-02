@@ -2,6 +2,8 @@
 
 Evaluates your AI agent prompts against research-backed prompt engineering best practices — pinpoints what's weak and gives you concrete fixes with before/after snippets you can apply immediately.
 
+**Full documentation: [prompts.hoshoai.com/docs](https://prompts.hoshoai.com/docs)** — the [Git Bot guide](https://prompts.hoshoai.com/docs/git) covers everything below plus every configuration input, what happens at the monthly cap, and the failure modes we actually see. This README is the quickstart; the docs are kept current.
+
 ## How It Works
 
 Your prompts are evaluated across four macro factors drawn from prompt engineering research and model-provider guidelines, each broken into named sub-factors. Every factor is rated green, yellow, or red so you can see at a glance where to focus:
@@ -316,6 +318,8 @@ This GitHub Action client is open source under the [MIT License](LICENSE). The H
 | No PR comment appears but action succeeds | Check that `GITHUB_TOKEN` has write permissions and the workflow has the permissions block |
 | Action times out | Default timeout is 600s (10 minutes). Evaluations take 60-90 seconds per file. For many files, increase with `timeout: 600` |
 | Slash command doesn't trigger | Ensure your workflow has the `issue_comment` trigger and the `if` condition checks for the command (see setup workflow above) |
+
+Still stuck? [prompts.hoshoai.com/docs/troubleshooting](https://prompts.hoshoai.com/docs/troubleshooting) carries the same table alongside the MCP and co-presence failure modes, and is updated as new ones turn up. If your allowance is the problem the check stays green and the PR comment says so — see [plans and limits](https://prompts.hoshoai.com/docs/plans-and-limits).
 
 ---
 
