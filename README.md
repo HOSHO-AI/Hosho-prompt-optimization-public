@@ -25,7 +25,7 @@ For every factor that isn't green, you get specific findings — what's missing,
 
 Create one yourself at [prompts.hoshoai.com/setup/git](https://prompts.hoshoai.com/setup/git) — sign in with Google and click **Create my key**. It's instant, and the same `pfr_...` key also works for the [Hosho MCP](https://prompts.hoshoai.com/setup/mcp).
 
-Your key starts on the **Free plan**: 50 PR reviews a month (one per pull request, however many prompt files it touches) plus 20 full review runs in the editor and the MCP. When a run exhausts the monthly allowance, the Action posts a note on the PR and reviews the remaining files on your next push once the allowance resets — the check never fails because of it, on either trigger. A manual `workflow_dispatch` run reviews one prompt on demand and draws the **review-run** pool rather than the PR pool, since it is not a pull-request review. See [plans](https://prompts.hoshoai.com/pricing).
+Your key starts on the **Free plan**. A PR review is one pull request, however many prompt files it touches; a review run is one full review in the editor or the MCP. The two draw separate monthly pools — the current allowances are on the [plans page](https://prompts.hoshoai.com/pricing), which is the one place they are kept up to date. When a run exhausts the monthly allowance, the Action posts a note on the PR and reviews the remaining files on your next push once the allowance resets — the check never fails because of it, on either trigger. A manual `workflow_dispatch` run reviews one prompt on demand and draws the **review-run** pool rather than the PR pool, since it is not a pull-request review.
 
 (Prefer a human? [otto@hoshoai.com](mailto:otto@hoshoai.com) works too.)
 
