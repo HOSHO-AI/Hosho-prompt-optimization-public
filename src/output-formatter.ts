@@ -228,7 +228,7 @@ function formatHeader(
  * the reader's first question is "why is this review incomplete?" and the answer must not be
  * buried in the Actions log where only a maintainer would find it.
  */
-function formatCapBanner(capMessage?: string, unreviewed?: string[]): string {
+export function formatCapBanner(capMessage?: string, unreviewed?: string[]): string {
   if (!capMessage) return '';
   const files = unreviewed?.length
     ? `\n\nNot reviewed this run: ${unreviewed.map(p => `\`${p}\``).join(', ')}. ` +
