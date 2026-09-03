@@ -18,14 +18,16 @@ import {
   formatJobSummary,
   formatReviewJobSummary,
   formatOnDemandSummary,
+  formatCapBanner,
   BOT_MARKER,
 } from './output-formatter';
 import { ComparisonResult, ChangeItem } from './types';
 import { readPriorState, partitionByHash, parseStateBlock } from './review-state';
+import { findBotComment, postPlaceholder, removePlaceholder, type PlaceholderHandle } from './pr-comment';
 
 // Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
 // inferred from behaviour. Bump on release alongside the git tag.
-const ACTION_VERSION = 'v1.47.0';
+const ACTION_VERSION = 'v1.48.0';
 
 /**
  * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.
@@ -244,7 +246,28 @@ async function run(): Promise<void> {
 
 // ---- PR Mode ----
 
+/**
+ * Thin wrapper whose only job is cleanup. `reviewPR` posts an in-progress comment before it
+ * starts calling the API (see src/pr-comment.ts for why); if the run then dies, that comment
+ * must go, or its marker tells a scheduled scan the PR is reviewed and the review never comes.
+ * The cleanup lives here rather than in run()'s catch because octokit, owner and repo are
+ * locals of the review and never reach that far.
+ */
 async function runPRMode(
+  // every parameter of reviewPR except its leading cleanup handle
+  ...args: Parameters<typeof reviewPR> extends [unknown, ...infer Rest] ? Rest : never
+): Promise<void> {
+  const held: { placeholder: PlaceholderHandle | null } = { placeholder: null };
+  try {
+    await reviewPR(held, ...args);
+  } catch (e) {
+    if (held.placeholder) await removePlaceholder(held.placeholder);
+    throw e;
+  }
+}
+
+async function reviewPR(
+  held: { placeholder: PlaceholderHandle | null },
   apiKey: string,
   apiUrl: string,
   filePattern: string,
@@ -444,7 +467,12 @@ async function runPRMode(
   // API cost. Skip files whose content pair is unchanged since the last review.
   //
   // FAIL OPEN: no prior comment, unparseable state, or dedupe disabled ⇒ review everything.
-  const priorBody = dedupe ? await findExistingCommentBody(octokit, owner, repo, pullNumber) : undefined;
+  // Unconditional lookup. Whether the comment EXISTS decides the in-progress comment below; only
+  // whether its state may be TRUSTED depends on `dedupe`. Gating the lookup itself on `dedupe` -
+  // as this did - makes a slash-command run (dedupe off) believe there is no comment and post a
+  // second one alongside the real review.
+  const existing = await findBotComment(octokit, owner, repo, pullNumber);
+  const priorBody = dedupe ? existing?.body : undefined;
   // Two roles, two stores: the top state block decides what may be SKIPPED (truncation-proof), the
   // inline sections supply the markdown to CARRY FORWARD (truncatable, and handled as such below).
   const { shas: priorShas, sections: carriedSections } = readPriorState(priorBody);
@@ -478,6 +506,13 @@ async function runPRMode(
       unchanged.map(f => f.name).join(', ')
     );
   }
+
+  // Claim the PR before spending a cent on it. Until the end-of-run write lands, a scheduled
+  // re-scan that greps for the bot marker sees nothing and starts a duplicate review of the same
+  // PR - 55 of 519 billed reviews over five days on appsmithorg/kite, every one a duplicate.
+  // Posted only when no bot comment exists yet; an existing one already carries the marker.
+  // Deliberately AFTER the all-unchanged early return above, which must leave the PR untouched.
+  if (!existing) held.placeholder = (await postPlaceholder(octokit, owner, repo, pullNumber, changed.length)) ?? null;
 
   // Step 3: Call Lambda API (one file at a time to avoid connection timeout on large PRs)
   core.info(`Reviewing ${changed.length} file(s)...`);
@@ -592,6 +627,30 @@ async function runPRMode(
     result.changeSummary = [...(result.changeSummary ?? []), ...items];
   }
 
+  if (allResults.length === 0 && capMessage) {
+    // The allowance was already spent when the run started, so the cap hit on file #1 and nothing
+    // was reviewed. That is a BILLING condition, not a build failure - the same condition that,
+    // hit mid-loop, posts a banner and stays green. Falling into the throw below instead turned it
+    // red with no comment at all, contradicting what the README promises, and would now also
+    // strand the in-progress comment and permanently silence a scheduled re-scan of this PR.
+    core.warning(`Monthly allowance reached before any file was reviewed: ${capMessage}`);
+    const capOnlyBody =
+      `${BOT_MARKER}\n## Hosho PR Review: ${owner}/${repo}#${pullNumber}\n\n` +
+      formatCapBanner(capMessage, capSkipped);
+    await postOrUpdatePRComment(octokit, owner, repo, pullNumber, capOnlyBody);
+    held.placeholder = null;
+    await core.summary
+      .addRaw(`## Hosho\n\n> [!IMPORTANT]\n> **Monthly allowance reached.** ${capMessage}\n`)
+      .write();
+    await sendBotEvent(apiUrl, apiKey, {
+      repository: `${owner}/${repo}`, prNumber: pullNumber, event: triggerName(),
+      filesTotal: apiFiles.length, filesReviewed: 0, filesSkipped: unchanged.length,
+      actionVersion: ACTION_VERSION, capBlocked: true,
+      commentBytes: capOnlyBody.length, stateEntries: 0,
+    });
+    return;
+  }
+
   if (allResults.length === 0) {
     throw new Error(`All ${changed.length} file(s) failed: ${errors.join('; ')}`);
   }
@@ -658,6 +717,9 @@ async function runPRMode(
     ? formatReviewComment(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment)
     : formatPRComment(comparisons, pullNumber, repoFullName, bundledByFile, carry, capForComment);
   await postOrUpdatePRComment(octokit, owner, repo, pullNumber, commentBody);
+  // The placeholder IS this comment now (postOrUpdatePRComment finds it by marker and updates it
+  // in place), so there is nothing left to clean up if a later step throws.
+  held.placeholder = null;
 
   // Step 6: Write Job Summary
   core.info('Writing Job Summary...');
@@ -793,30 +855,6 @@ async function updateWorkflowRunName(
 }
 
 // ---- Shared Helpers ----
-
-/**
- * The body of our existing bot comment on this PR, or undefined.
- *
- * This is the dedupe state store: the comment we already read and update on every run, so no new
- * infrastructure is needed. Never throws — a lookup failure must fail OPEN (review everything)
- * rather than skip a review we owe the customer.
- */
-async function findExistingCommentBody(
-  octokit: ReturnType<typeof github.getOctokit>,
-  owner: string,
-  repo: string,
-  pullNumber: number,
-): Promise<string | undefined> {
-  try {
-    const comments = await octokit.paginate(octokit.rest.issues.listComments, {
-      owner, repo, issue_number: pullNumber, per_page: 100,
-    });
-    return comments.find((c) => c.body?.includes(BOT_MARKER))?.body ?? undefined;
-  } catch (e) {
-    core.warning(`Could not read prior review comment (${e instanceof Error ? e.message : e}); reviewing all files.`);
-    return undefined;
-  }
-}
 
 async function postOrUpdatePRComment(
   octokit: ReturnType<typeof github.getOctokit>,
