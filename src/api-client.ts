@@ -49,6 +49,37 @@ export interface ReviewFileResult {
   comparison: ComparisonResult;
   customPrinciplesResult?: CustomPrinciplesResult;
   macroScores?: MacroScore[]; // v3 macro roll-up (improve mode)
+  /** Review mode: whether each engine stage actually ran and parsed. Every stage fails OPEN on
+   *  the engine side, so `main: 'failed'` is the only way to tell "found nothing" from "could not
+   *  review" - and since the engine's per-stage Haiku fallback it means both transports failed. */
+  pipeline?: ReviewPipelineStatus;
+}
+
+export interface ReviewPipelineStatus {
+  coverage: 'ok' | 'empty' | 'failed' | 'skipped';
+  enumerate: 'ok' | 'empty' | 'failed' | 'skipped';
+  main: 'ok' | 'failed';
+  customPrinciples?: 'ok' | 'failed' | 'skipped';
+}
+
+/**
+ * How the action should treat a review result's pipeline status. `failed` ⇒ treat the file as
+ * NOT reviewed: no comment section, no hash stamp, re-reviewed on the next push. Anything less
+ * is a warning: the review landed, one supporting stage did not.
+ *
+ * Why this exists: a review whose main diff call failed comes back as status 'success' with
+ * every factor no-change and an empty summary. Rendered, that is a green "Approve This PR", and
+ * the hash stamp then hid the file from every later run until someone edited it.
+ */
+export function assessPipeline(result: Pick<ReviewFileResult, 'pipeline'> | undefined): { failed: boolean; warnings: string[] } {
+  const p = result?.pipeline;
+  if (!p) return { failed: false, warnings: [] };
+  if (p.main === 'failed') return { failed: true, warnings: [] };
+  const warnings: string[] = [];
+  for (const stage of ['coverage', 'enumerate', 'customPrinciples'] as const) {
+    if (p[stage] === 'failed') warnings.push(`${stage} stage failed; the review ran without it`);
+  }
+  return { failed: false, warnings };
 }
 
 export interface ReviewAPIResponse {
