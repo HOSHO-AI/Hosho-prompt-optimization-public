@@ -6,12 +6,12 @@ import { parseModelsConfig, resolveModel, type ModelRule } from './models-config
 import { createTwoFilesPatch } from 'diff';
 import { identifyChangedPromptFiles } from './file-identifier';
 import {
-  fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, bundleSiblingsForPrompt,
+  fetchFileVersions, fetchFileFromDisk, resolveTemplateVariables, bundleSkillsForPrompt, planSkillBundle, bundleSiblingsForPrompt,
   resolveSharedReferences, parseAssemblyConfig, buildSegmentManifest,
   AssemblyConfig, EMPTY_ASSEMBLY_CONFIG, ReferenceViolation, evaluateReferenceConvention,
   resolveMergeBase,
 } from './file-fetcher';
-import { callReviewAPI, sendBotEvent, PlanCapReachedError, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL } from './api-client';
+import { callReviewAPI, sendBotEvent, PlanCapReachedError, ReviewAPIRequest, ReviewFileResult, DEFAULT_API_URL, assessPipeline } from './api-client';
 import {
   formatPRComment,
   formatReviewComment,
@@ -27,7 +27,7 @@ import { findBotComment, postPlaceholder, removePlaceholder, type PlaceholderHan
 
 // Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
 // inferred from behaviour. Bump on release alongside the git tag.
-const ACTION_VERSION = 'v1.48.0';
+const ACTION_VERSION = 'v1.49.0';
 
 /**
  * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.
@@ -395,12 +395,15 @@ async function reviewPR(
     // Skill bundling — both sides need it so diff analysis sees consistent
     // assembled content rather than flagging "all skills newly added"
     if (skillsDirs.length > 0) {
-      const r = bundleSkillsForPrompt(assembledAfter, headSha, skillsDirs);
+      // One cap decision for both sides (planSkillBundle): a skill the caps drop is dropped on
+      // both, so a grown skill can no longer make an unrelated one "vanish" on the after side.
+      const plan = planSkillBundle(assembledBefore, contentBaseSha, assembledAfter, headSha, skillsDirs);
+      const r = bundleSkillsForPrompt(assembledAfter, headSha, skillsDirs, plan.allow);
       assembledAfter = r.assembled;
       fileBundled.skills = r.bundled;
       Object.assign(sourcePaths, r.paths);
       if (assembledBefore !== null) {
-        assembledBefore = bundleSkillsForPrompt(assembledBefore, contentBaseSha, skillsDirs).assembled;
+        assembledBefore = bundleSkillsForPrompt(assembledBefore, contentBaseSha, skillsDirs, plan.allow).assembled;
       }
     }
 
@@ -577,6 +580,17 @@ async function reviewPR(
         core.warning(`API error for ${file.name}: ${resp.message || 'Unknown error'}. Skipping.`);
         continue;
       }
+      // A 'success' whose diff stage failed is not a review. Treat it exactly like an API error:
+      // no section, no hash stamp, re-reviewed on the next push - never a green Approve on an
+      // empty summary.
+      const pipeline = assessPipeline(resp.results[0]);
+      if (pipeline.failed) {
+        errors.push(`${file.name}: review engine could not complete the diff analysis`);
+        failedPaths.add(file.path);
+        core.warning(`Review pipeline failed for ${file.name} (main diff stage). Skipping; it will be reviewed on the next push.`);
+        continue;
+      }
+      for (const w of pipeline.warnings) core.warning(`${file.name}: ${w}`);
       allResults.push(...resp.results);
       const modelInfo = resp.results[0]?.targetModelFamily
         ? ` (model: ${resp.results[0].targetModelFamily}${resp.results[0].targetModelName ? ` / ${resp.results[0].targetModelName}` : ''})`

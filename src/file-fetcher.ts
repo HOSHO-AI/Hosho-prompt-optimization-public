@@ -259,25 +259,104 @@ function globToRegex(glob: string): RegExp {
  *
  * Graceful failure: on any error, returns original content unchanged.
  */
+/** Backticked tokens in `content` that look like skill names, deduped, in first-appearance order. */
+function collectSkillCandidates(content: string): string[] {
+  const candidates = new Set<string>();
+  let match;
+  const regex = new RegExp(BACKTICK_TOKEN_REGEX.source, 'g');
+  while ((match = regex.exec(content)) !== null) {
+    candidates.add(match[1]);
+  }
+  return [...candidates];
+}
+
+/** Resolve a skill name at a commit: exact, then kebab-normalised (underscore → hyphen),
+ *  `<dir>/<name>/SKILL.md` then `<dir>/<name>.md`. Null when it resolves nowhere. */
+function resolveSkillAt(name: string, commitSha: string, skillsDirs: string[]): { body: string; path: string } | null {
+  const kebab = name.replace(/_/g, '-');
+  const candidatePaths: string[] = [];
+  for (const dir of skillsDirs) {
+    candidatePaths.push(`${dir}/${name}/SKILL.md`);
+    if (kebab !== name) candidatePaths.push(`${dir}/${kebab}/SKILL.md`);
+    candidatePaths.push(`${dir}/${name}.md`);
+    if (kebab !== name) candidatePaths.push(`${dir}/${kebab}.md`);
+  }
+  for (const candidate of candidatePaths) {
+    const body = gitShowFile(commitSha, candidate);
+    if (body !== null) return { body, path: candidate };
+  }
+  return null;
+}
+
+/**
+ * Decide ONCE which skills the before and after bundles may carry, so the caps cannot evict a
+ * skill on one side only.
+ *
+ * Why: the caps are first-fit in reference order, and `bundleSkillsForPrompt` used to apply them
+ * independently per side. When a PR grew one skill, a later skill that fitted BEFORE no longer
+ * fitted AFTER, and every reviewer model saw a 100-line `## Skill: <name>` section vanish while
+ * the prompt still referenced it - a spurious "removed skill" finding (and on one PR a critical)
+ * on every model in the 2026-09-04 review-model lab (`Hosho-prompt-optimization-api/experiments/
+ * review-lab-2026-09-04`), caused by assembly, not by the change.
+ *
+ * The plan walks the union of both sides' candidates (after's order first, then before-only
+ * names), charges each skill at its LARGER size across the two commits, and first-fits under the
+ * same caps. A skill referenced on only one side still bundles on only that side (that is a real
+ * change); a skill the caps drop is dropped on both.
+ */
+export function planSkillBundle(
+  beforeContent: string | null,
+  baseSha: string,
+  afterContent: string,
+  headSha: string,
+  skillsDirs: string[],
+): { allow: Set<string>; dropped: string[] } {
+  const allow = new Set<string>();
+  const dropped: string[] = [];
+  if (!skillsDirs || skillsDirs.length === 0) return { allow, dropped };
+  try {
+    const order = [...collectSkillCandidates(afterContent)];
+    for (const name of (beforeContent === null ? [] : collectSkillCandidates(beforeContent))) {
+      if (!order.includes(name)) order.push(name);
+    }
+    let totalBytes = 0;
+    for (const name of order) {
+      const sides = [resolveSkillAt(name, headSha, skillsDirs), beforeContent === null ? null : resolveSkillAt(name, baseSha, skillsDirs)];
+      const bytes = Math.max(...sides.map(r => (r ? Buffer.byteLength(r.body, 'utf-8') : 0)));
+      if (!sides.some(Boolean)) continue;                 // resolves nowhere - not a skill
+      if (allow.size >= MAX_SKILLS_PER_PROMPT || totalBytes + bytes > MAX_SKILLS_BYTES) {
+        dropped.push(name);
+        continue;
+      }
+      totalBytes += bytes;
+      allow.add(name);
+    }
+    if (dropped.length > 0) {
+      core.warning(`  Skill bundling: dropped ${dropped.length} skill(s) on BOTH sides due to caps (${MAX_SKILLS_PER_PROMPT} skills / ${MAX_SKILLS_BYTES} bytes): ${dropped.join(', ')}`);
+    }
+  } catch (err) {
+    core.warning(`  Skill bundling plan failed (${err instanceof Error ? err.message : String(err)}); falling back to per-side caps`);
+    return { allow: new Set<string>(), dropped: [] };
+  }
+  return { allow, dropped };
+}
+
 export function bundleSkillsForPrompt(
   content: string,
   commitSha: string,
   skillsDirs: string[],
+  // When given (from planSkillBundle), bundle exactly the referenced skills in this set and apply
+  // no per-side cap - the plan already applied it jointly. Omitted ⇒ the historical per-side caps.
+  allow?: Set<string>,
 ): { assembled: string; bundled: string[]; paths: Record<string, string> } {
   try {
     if (!skillsDirs || skillsDirs.length === 0) {
       return { assembled: content, bundled: [], paths: {} };
     }
 
-    // Collect candidate skill names from backticked tokens (deduped).
-    const candidates = new Set<string>();
-    let match;
-    const regex = new RegExp(BACKTICK_TOKEN_REGEX.source, 'g');
-    while ((match = regex.exec(content)) !== null) {
-      candidates.add(match[1]);
-    }
+    const candidates = collectSkillCandidates(content);
 
-    if (candidates.size === 0) {
+    if (candidates.length === 0) {
       return { assembled: content, bundled: [], paths: {} };
     }
 
@@ -290,35 +369,25 @@ export function bundleSkillsForPrompt(
     const droppedForCap: string[] = [];
 
     for (const name of candidates) {
+      if (allow) {
+        if (!allow.has(name)) continue;                   // dropped by the joint plan, or not a skill
+        const r = resolveSkillAt(name, commitSha, skillsDirs);
+        if (r) resolved.push({ name, body: r.body, path: r.path });
+        continue;
+      }
       if (resolved.length >= MAX_SKILLS_PER_PROMPT) {
         droppedForCap.push(name);
         continue;
       }
-      // Try exact, then kebab-normalized (underscore → hyphen)
-      const kebab = name.replace(/_/g, '-');
-      const candidatePaths: string[] = [];
-      for (const dir of skillsDirs) {
-        candidatePaths.push(`${dir}/${name}/SKILL.md`);
-        if (kebab !== name) candidatePaths.push(`${dir}/${kebab}/SKILL.md`);
-        candidatePaths.push(`${dir}/${name}.md`);
-        if (kebab !== name) candidatePaths.push(`${dir}/${kebab}.md`);
-      }
-
-      let body: string | null = null;
-      let resolvedPath: string | null = null;
-      for (const candidate of candidatePaths) {
-        body = gitShowFile(commitSha, candidate);
-        if (body !== null) { resolvedPath = candidate; break; }
-      }
-      if (body === null) continue;
-
-      const bodyBytes = Buffer.byteLength(body, 'utf-8');
+      const r = resolveSkillAt(name, commitSha, skillsDirs);
+      if (!r) continue;
+      const bodyBytes = Buffer.byteLength(r.body, 'utf-8');
       if (totalBytes + bodyBytes > MAX_SKILLS_BYTES) {
         droppedForCap.push(name);
         continue;
       }
       totalBytes += bodyBytes;
-      resolved.push({ name, body, path: resolvedPath ?? name });
+      resolved.push({ name, body: r.body, path: r.path });
     }
 
     if (resolved.length === 0) {

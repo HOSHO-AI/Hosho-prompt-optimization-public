@@ -41,6 +41,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.PlanCapReachedError = exports.DEFAULT_API_URL = void 0;
+exports.assessPipeline = assessPipeline;
 exports.callReviewAPI = callReviewAPI;
 exports.sendBotEvent = sendBotEvent;
 const core = __importStar(__nccwpck_require__(7484));
@@ -48,6 +49,28 @@ const DEFAULT_API_URL = 'https://2pdp5lkd4g5a4hi3aigcdxighe0ebgjy.lambda-url.us-
 exports.DEFAULT_API_URL = DEFAULT_API_URL;
 const MAX_RETRIES = 3;
 const BACKOFF_DELAYS_MS = [5000, 10000, 20000]; // 5s, 10s, 20s
+/**
+ * How the action should treat a review result's pipeline status. `failed` ⇒ treat the file as
+ * NOT reviewed: no comment section, no hash stamp, re-reviewed on the next push. Anything less
+ * is a warning: the review landed, one supporting stage did not.
+ *
+ * Why this exists: a review whose main diff call failed comes back as status 'success' with
+ * every factor no-change and an empty summary. Rendered, that is a green "Approve This PR", and
+ * the hash stamp then hid the file from every later run until someone edited it.
+ */
+function assessPipeline(result) {
+    const p = result?.pipeline;
+    if (!p)
+        return { failed: false, warnings: [] };
+    if (p.main === 'failed')
+        return { failed: true, warnings: [] };
+    const warnings = [];
+    for (const stage of ['coverage', 'enumerate', 'customPrinciples']) {
+        if (p[stage] === 'failed')
+            warnings.push(`${stage} stage failed; the review ran without it`);
+    }
+    return { failed: false, warnings };
+}
 /**
  * The monthly plan allowance is exhausted. Distinct from every other 4xx because it is the ONE
  * failure where continuing to the next file is wrong: the allowance is gone for the whole run.
@@ -221,6 +244,7 @@ exports.gitShowFile = gitShowFile;
 exports.fetchFileFromDisk = fetchFileFromDisk;
 exports.resolveTemplateVariables = resolveTemplateVariables;
 exports.gitListDir = gitListDir;
+exports.planSkillBundle = planSkillBundle;
 exports.bundleSkillsForPrompt = bundleSkillsForPrompt;
 exports.bundleSiblingsForPrompt = bundleSiblingsForPrompt;
 exports.parseAssemblyConfig = parseAssemblyConfig;
@@ -458,19 +482,96 @@ function globToRegex(glob) {
  *
  * Graceful failure: on any error, returns original content unchanged.
  */
-function bundleSkillsForPrompt(content, commitSha, skillsDirs) {
+/** Backticked tokens in `content` that look like skill names, deduped, in first-appearance order. */
+function collectSkillCandidates(content) {
+    const candidates = new Set();
+    let match;
+    const regex = new RegExp(BACKTICK_TOKEN_REGEX.source, 'g');
+    while ((match = regex.exec(content)) !== null) {
+        candidates.add(match[1]);
+    }
+    return [...candidates];
+}
+/** Resolve a skill name at a commit: exact, then kebab-normalised (underscore → hyphen),
+ *  `<dir>/<name>/SKILL.md` then `<dir>/<name>.md`. Null when it resolves nowhere. */
+function resolveSkillAt(name, commitSha, skillsDirs) {
+    const kebab = name.replace(/_/g, '-');
+    const candidatePaths = [];
+    for (const dir of skillsDirs) {
+        candidatePaths.push(`${dir}/${name}/SKILL.md`);
+        if (kebab !== name)
+            candidatePaths.push(`${dir}/${kebab}/SKILL.md`);
+        candidatePaths.push(`${dir}/${name}.md`);
+        if (kebab !== name)
+            candidatePaths.push(`${dir}/${kebab}.md`);
+    }
+    for (const candidate of candidatePaths) {
+        const body = gitShowFile(commitSha, candidate);
+        if (body !== null)
+            return { body, path: candidate };
+    }
+    return null;
+}
+/**
+ * Decide ONCE which skills the before and after bundles may carry, so the caps cannot evict a
+ * skill on one side only.
+ *
+ * Why: the caps are first-fit in reference order, and `bundleSkillsForPrompt` used to apply them
+ * independently per side. When a PR grew one skill, a later skill that fitted BEFORE no longer
+ * fitted AFTER, and every reviewer model saw a 100-line `## Skill: <name>` section vanish while
+ * the prompt still referenced it - a spurious "removed skill" finding (and on one PR a critical)
+ * on every model in the 2026-09-04 review-model lab (`Hosho-prompt-optimization-api/experiments/
+ * review-lab-2026-09-04`), caused by assembly, not by the change.
+ *
+ * The plan walks the union of both sides' candidates (after's order first, then before-only
+ * names), charges each skill at its LARGER size across the two commits, and first-fits under the
+ * same caps. A skill referenced on only one side still bundles on only that side (that is a real
+ * change); a skill the caps drop is dropped on both.
+ */
+function planSkillBundle(beforeContent, baseSha, afterContent, headSha, skillsDirs) {
+    const allow = new Set();
+    const dropped = [];
+    if (!skillsDirs || skillsDirs.length === 0)
+        return { allow, dropped };
+    try {
+        const order = [...collectSkillCandidates(afterContent)];
+        for (const name of (beforeContent === null ? [] : collectSkillCandidates(beforeContent))) {
+            if (!order.includes(name))
+                order.push(name);
+        }
+        let totalBytes = 0;
+        for (const name of order) {
+            const sides = [resolveSkillAt(name, headSha, skillsDirs), beforeContent === null ? null : resolveSkillAt(name, baseSha, skillsDirs)];
+            const bytes = Math.max(...sides.map(r => (r ? Buffer.byteLength(r.body, 'utf-8') : 0)));
+            if (!sides.some(Boolean))
+                continue; // resolves nowhere - not a skill
+            if (allow.size >= MAX_SKILLS_PER_PROMPT || totalBytes + bytes > MAX_SKILLS_BYTES) {
+                dropped.push(name);
+                continue;
+            }
+            totalBytes += bytes;
+            allow.add(name);
+        }
+        if (dropped.length > 0) {
+            core.warning(`  Skill bundling: dropped ${dropped.length} skill(s) on BOTH sides due to caps (${MAX_SKILLS_PER_PROMPT} skills / ${MAX_SKILLS_BYTES} bytes): ${dropped.join(', ')}`);
+        }
+    }
+    catch (err) {
+        core.warning(`  Skill bundling plan failed (${err instanceof Error ? err.message : String(err)}); falling back to per-side caps`);
+        return { allow: new Set(), dropped: [] };
+    }
+    return { allow, dropped };
+}
+function bundleSkillsForPrompt(content, commitSha, skillsDirs, 
+// When given (from planSkillBundle), bundle exactly the referenced skills in this set and apply
+// no per-side cap - the plan already applied it jointly. Omitted ⇒ the historical per-side caps.
+allow) {
     try {
         if (!skillsDirs || skillsDirs.length === 0) {
             return { assembled: content, bundled: [], paths: {} };
         }
-        // Collect candidate skill names from backticked tokens (deduped).
-        const candidates = new Set();
-        let match;
-        const regex = new RegExp(BACKTICK_TOKEN_REGEX.source, 'g');
-        while ((match = regex.exec(content)) !== null) {
-            candidates.add(match[1]);
-        }
-        if (candidates.size === 0) {
+        const candidates = collectSkillCandidates(content);
+        if (candidates.length === 0) {
             return { assembled: content, bundled: [], paths: {} };
         }
         // (name, body, sourcePath) — sourcePath is the repo path the skill resolved
@@ -481,39 +582,28 @@ function bundleSkillsForPrompt(content, commitSha, skillsDirs) {
         let totalBytes = 0;
         const droppedForCap = [];
         for (const name of candidates) {
+            if (allow) {
+                if (!allow.has(name))
+                    continue; // dropped by the joint plan, or not a skill
+                const r = resolveSkillAt(name, commitSha, skillsDirs);
+                if (r)
+                    resolved.push({ name, body: r.body, path: r.path });
+                continue;
+            }
             if (resolved.length >= MAX_SKILLS_PER_PROMPT) {
                 droppedForCap.push(name);
                 continue;
             }
-            // Try exact, then kebab-normalized (underscore → hyphen)
-            const kebab = name.replace(/_/g, '-');
-            const candidatePaths = [];
-            for (const dir of skillsDirs) {
-                candidatePaths.push(`${dir}/${name}/SKILL.md`);
-                if (kebab !== name)
-                    candidatePaths.push(`${dir}/${kebab}/SKILL.md`);
-                candidatePaths.push(`${dir}/${name}.md`);
-                if (kebab !== name)
-                    candidatePaths.push(`${dir}/${kebab}.md`);
-            }
-            let body = null;
-            let resolvedPath = null;
-            for (const candidate of candidatePaths) {
-                body = gitShowFile(commitSha, candidate);
-                if (body !== null) {
-                    resolvedPath = candidate;
-                    break;
-                }
-            }
-            if (body === null)
+            const r = resolveSkillAt(name, commitSha, skillsDirs);
+            if (!r)
                 continue;
-            const bodyBytes = Buffer.byteLength(body, 'utf-8');
+            const bodyBytes = Buffer.byteLength(r.body, 'utf-8');
             if (totalBytes + bodyBytes > MAX_SKILLS_BYTES) {
                 droppedForCap.push(name);
                 continue;
             }
             totalBytes += bodyBytes;
-            resolved.push({ name, body, path: resolvedPath ?? name });
+            resolved.push({ name, body: r.body, path: r.path });
         }
         if (resolved.length === 0) {
             return { assembled: content, bundled: [], paths: {} };
@@ -1134,7 +1224,7 @@ const review_state_1 = __nccwpck_require__(2279);
 const pr_comment_1 = __nccwpck_require__(1945);
 // Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
 // inferred from behaviour. Bump on release alongside the git tag.
-const ACTION_VERSION = 'v1.48.0';
+const ACTION_VERSION = 'v1.49.0';
 /**
  * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.
  *
@@ -1454,12 +1544,15 @@ async function reviewPR(held, apiKey, apiUrl, filePattern, promptPath, systemOve
         // Skill bundling — both sides need it so diff analysis sees consistent
         // assembled content rather than flagging "all skills newly added"
         if (skillsDirs.length > 0) {
-            const r = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledAfter, headSha, skillsDirs);
+            // One cap decision for both sides (planSkillBundle): a skill the caps drop is dropped on
+            // both, so a grown skill can no longer make an unrelated one "vanish" on the after side.
+            const plan = (0, file_fetcher_1.planSkillBundle)(assembledBefore, contentBaseSha, assembledAfter, headSha, skillsDirs);
+            const r = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledAfter, headSha, skillsDirs, plan.allow);
             assembledAfter = r.assembled;
             fileBundled.skills = r.bundled;
             Object.assign(sourcePaths, r.paths);
             if (assembledBefore !== null) {
-                assembledBefore = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledBefore, contentBaseSha, skillsDirs).assembled;
+                assembledBefore = (0, file_fetcher_1.bundleSkillsForPrompt)(assembledBefore, contentBaseSha, skillsDirs, plan.allow).assembled;
             }
         }
         // Sibling bundling — same dual-sided treatment. Handle renames: the
@@ -1620,6 +1713,18 @@ async function reviewPR(held, apiKey, apiUrl, filePattern, promptPath, systemOve
                 core.warning(`API error for ${file.name}: ${resp.message || 'Unknown error'}. Skipping.`);
                 continue;
             }
+            // A 'success' whose diff stage failed is not a review. Treat it exactly like an API error:
+            // no section, no hash stamp, re-reviewed on the next push - never a green Approve on an
+            // empty summary.
+            const pipeline = (0, api_client_1.assessPipeline)(resp.results[0]);
+            if (pipeline.failed) {
+                errors.push(`${file.name}: review engine could not complete the diff analysis`);
+                failedPaths.add(file.path);
+                core.warning(`Review pipeline failed for ${file.name} (main diff stage). Skipping; it will be reviewed on the next push.`);
+                continue;
+            }
+            for (const w of pipeline.warnings)
+                core.warning(`${file.name}: ${w}`);
             allResults.push(...resp.results);
             const modelInfo = resp.results[0]?.targetModelFamily
                 ? ` (model: ${resp.results[0].targetModelFamily}${resp.results[0].targetModelName ? ` / ${resp.results[0].targetModelName}` : ''})`
