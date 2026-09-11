@@ -488,14 +488,46 @@ function groupRevertsByLineRange(reverts: ChangeItem[]): ChangeItem[][] {
   return groups;
 }
 
-function formatRevertSection(changeSummary?: ChangeItem[]): string {
+function formatRevertSection(changeSummary?: ChangeItem[], collapsed = false): string {
   if (!changeSummary) return '';
   const reverts = changeSummary.filter(c => c.effect !== 'positive' && c.revert);
   if (reverts.length === 0) return '';
 
   const groups = groupRevertsByLineRange(reverts);
 
-  let md = '### SUGGESTED FIXES BEFORE MERGING\n\n';
+  // COLLAPSED IN REVIEW MODE (2026-09-11), via `collapsed` - improve mode's own PR comment keeps
+  // the plain heading, a deliberate earlier decision its tests still pin ("shows revert section
+  // without details", output-formatter.test.ts).
+  //
+  // This section is the single biggest block of a review comment: across 14
+  // real comments on appsmithorg/kite it was 30% of the bytes, and collapsing it hides 53% of every
+  // line a reviewer scrolls past (11,705 -> 5,445 visible). The customer's words were that the
+  // comment "reads like an essay".
+  //
+  // Two placement rules, both load-bearing, do NOT move this wrapper:
+  //  1. It is emitted INSIDE formatReviewFileSection's return, i.e. within the
+  //     <!-- hosho-file --> ... <!-- /hosho-file --> fence wrapSection adds. That is what lets an
+  //     UNCHANGED file's section - which is re-emitted verbatim from the previous comment, see
+  //     buildSections - keep its own toggle. Verified: parseSections round-trips a comment
+  //     containing this block and the sha survives a re-emit.
+  //  2. <details> and </details> are built into the SAME string. composeComment drops whole file
+  //     sections from the tail past PR_COMMENT_MAX_LENGTH, so an open tag in one section and its
+  //     close in another would be orphaned by truncation.
+  //
+  // The blank line after </summary> is not required by GitHub's renderer any more (probe-verified
+  // 2026-09-11 against POST /markdown, with and without, identical output) but is emitted anyway:
+  // it costs nothing and the Job Summary and the MCP report page are less forgiving renderers.
+  //
+  // NOTE this does NOT reduce the comment's byte count - a collapsed block still counts toward the
+  // 65,000-char cap - so it does not address the truncation that is currently dropping whole file
+  // verdicts on the largest PRs. That needs content reduction, not rendering.
+  // The count goes in the summary so a reviewer knows what is behind the toggle without opening it.
+  const summary = groups.length === 1
+    ? 'Suggested fix before merging (1)'
+    : `Suggested fixes before merging (${groups.length})`;
+  let md = collapsed
+    ? `<details>\n<summary><b>${summary}</b></summary>\n\n`
+    : '### SUGGESTED FIXES BEFORE MERGING\n\n';
   for (let g = 0; g < groups.length; g++) {
     const group = groups[g];
     const first = group[0];
@@ -544,7 +576,7 @@ function formatRevertSection(changeSummary?: ChangeItem[]): string {
       md += `**${simpleLabel}: ${sanitizeInlineText(first.revert!)}**\n\n`;
     }
   }
-  return md;
+  return collapsed ? `${md}</details>\n\n` : md;
 }
 
 /**
@@ -916,7 +948,7 @@ function formatReviewFileSection(
   md += formatDiffSnippet(comp);
   md += formatVerdict(comp.changeSummary);
   md += formatWhatChanged(comp.changeSummary);
-  md += formatRevertSection(comp.changeSummary);
+  md += formatRevertSection(comp.changeSummary, true);
   return md;
 }
 
