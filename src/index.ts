@@ -27,7 +27,7 @@ import { findBotComment, postPlaceholder, removePlaceholder, type PlaceholderHan
 
 // Stamped on every bot beacon so a fleet still running an old build is VISIBLE rather than
 // inferred from behaviour. Bump on release alongside the git tag.
-const ACTION_VERSION = 'v1.49.0';
+const ACTION_VERSION = 'v1.50.0';
 
 /**
  * The trigger, at the resolution that distinguishes a PR's FIRST review from its Nth.
