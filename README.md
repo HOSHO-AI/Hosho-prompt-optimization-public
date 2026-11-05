@@ -15,7 +15,7 @@ Your prompts are evaluated across four macro factors drawn from prompt engineeri
 | Guidance | Does it say what to achieve, what it will be given, and how to reason? | Goal · Inputs · Method & reasoning |
 | Coherence | Does it hold together — unambiguous, decidable, consistent, no dead weight? | Clarity · Criteria · Consistency · Bloat |
 
-For every factor that isn't green, you get specific findings — what's missing, a snippet from your prompt, and a proposed fix you can drop in. The provider-fit checks are tuned per model family (Claude, GPT, Gemini, DeepSeek, Qwen, Kimi, GLM) and per class (standard vs reasoning) — see [docs/models-config.md](docs/models-config.md).
+For every factor that isn't green, you get specific findings — what's missing, a snippet from your prompt, and a proposed fix you can drop in. The provider-fit checks are tuned per model family (Claude, GPT, Gemini, DeepSeek, Qwen, Kimi, GLM) and by whether the model runs with thinking on or off — see [docs/models-config.md](docs/models-config.md).
 
 **PR mode** automatically posts a review summary on your pull request — verdict, what changed, and suggested fixes. For detailed scoring and improvement suggestions, comment `/hosho-improve` on the PR. **On-demand mode** writes full results to the Job Summary in the Actions tab.
 
