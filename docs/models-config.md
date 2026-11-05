@@ -29,8 +29,10 @@ with a class. Hosho reads the table *exactly* — it is never fed to an LLM.
 ```
 
 - **family** — one of: `claude`, `openai`, `gemini`, `deepseek`, `qwen`, `kimi`, `glm`.
-- **class** — `reasoning` or `standard` (default `standard`), written `family/class`. Reasoning models
-  are scored against a different set of best-practice rows.
+- **class** — whether the model thinks before it answers: `reasoning` for **thinking on**, `standard`
+  for **thinking off** (default `standard`), written `family/class`. Most current models think by
+  default (Claude 5.x, GPT-6 Astra, Gemini 3.x and 4, DeepSeek V4, Kimi K3, GLM-5.x), so `reasoning`
+  is usually the one you want; the two are scored against different best-practice rows.
 - **Most-specific wins.** A file matched by several globs takes the one with the longest fixed
   prefix, so row order doesn't matter — put catch-alls and specifics wherever you like.
 - **Forgiving.** Prose, headings and HTML comments (any line without a `|`) are ignored; the first
